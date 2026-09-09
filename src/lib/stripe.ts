@@ -6,7 +6,7 @@ export function isStripeConfigured(): boolean {
   return Boolean(process.env.STRIPE_SECRET_KEY);
 }
 
-/** Lazily constructed Stripe client. Returns null when no key is configured, so callers can fall back to dev mode. */
+/** Lazily constructed Stripe client. Returns null when no key is configured. Callers must fail closed unless an explicit non-production simulation flag is set. */
 export function getStripeClient(): Stripe | null {
   if (!isStripeConfigured()) return null;
   if (!client) {
