@@ -1,4 +1,5 @@
 import { addDays } from "date-fns";
+import { monthNameToNumber, parseNumericDateToken, parseStrictCivilDate } from "@/lib/legal/strict-date";
 
 /**
  * Deterministic, explainable "signal extraction" engine.
@@ -76,10 +77,17 @@ const ISSUE_KEYWORDS: { id: string; label: string; keywords: string[]; authority
 
 const URGENCY_KEYWORDS = ["hearing", "tribunal", "deadline", "court date", "tomorrow", "this week", "urgent"];
 
+export type ExtractedDateKind = "unknown" | "hearing" | "event" | "deadline_mention";
+
 export interface ExtractedDate {
   raw: string;
   date: Date | null;
   context: string;
+  valid: boolean;
+  missingYear: boolean;
+  ambiguousNumeric: boolean;
+  kind: ExtractedDateKind;
+  provenance: "narrative_extraction";
 }
 
 const MONTHS = [
@@ -87,8 +95,33 @@ const MONTHS = [
   "july", "august", "september", "october", "november", "december",
 ];
 
-/** Extract calendar dates mentioned in free text, with the surrounding sentence for context. */
-export function extractDates(text: string, referenceYear = new Date().getFullYear()): ExtractedDate[] {
+function classifyDateKind(context: string): ExtractedDateKind {
+  const lower = context.toLowerCase();
+  if (/\bhearing\b|\btribunal date\b|\bcourt date\b/.test(lower)) return "hearing";
+  if (/\bdeadline\b|\blimitation\b|\bfiling date\b/.test(lower)) return "deadline_mention";
+  return "event";
+}
+
+function extracted(
+  raw: string,
+  context: string,
+  date: Date | null,
+  extra: { missingYear?: boolean; ambiguousNumeric?: boolean } = {}
+): ExtractedDate {
+  return {
+    raw,
+    date,
+    context: context.trim(),
+    valid: date !== null,
+    missingYear: extra.missingYear === true,
+    ambiguousNumeric: extra.ambiguousNumeric === true,
+    kind: classifyDateKind(context),
+    provenance: "narrative_extraction",
+  };
+}
+
+/** Extract calendar dates mentioned in free text. Invalid civil dates are not rolled over. */
+export function extractDates(text: string): ExtractedDate[] {
   const results: ExtractedDate[] = [];
   const sentences = text.split(/(?<=[.!?\n])\s+/);
 
@@ -104,32 +137,49 @@ export function extractDates(text: string, referenceYear = new Date().getFullYea
 
     numericPattern.lastIndex = 0;
     while ((match = numericPattern.exec(sentence))) {
-      const [raw, d, m, y] = match;
+      const [raw, first, second, y] = match;
       const year = y.length === 2 ? 2000 + Number(y) : Number(y);
-      const date = safeDate(year, Number(m) - 1, Number(d));
-      results.push({ raw, date, context: sentence.trim() });
+      const parsed = parseNumericDateToken(Number(first), Number(second), year);
+      if (!parsed.ok && parsed.reason === "ambiguous_numeric") {
+        results.push(extracted(raw, sentence, null, { ambiguousNumeric: true }));
+      } else {
+        results.push(extracted(raw, sentence, parsed.ok ? parsed.date : null));
+      }
     }
 
     wordPattern.lastIndex = 0;
     while ((match = wordPattern.exec(sentence))) {
       const [raw, d, monthName, y] = match;
-      const month = MONTHS.indexOf(monthName.toLowerCase());
-      const year = y ? Number(y) : referenceYear;
-      const date = safeDate(year, month, Number(d));
-      results.push({ raw, date, context: sentence.trim() });
+      const month = monthNameToNumber(monthName);
+      if (!y) {
+        results.push(extracted(raw, sentence, null, { missingYear: true }));
+        continue;
+      }
+      if (month == null) {
+        results.push(extracted(raw, sentence, null));
+        continue;
+      }
+      const parsed = parseStrictCivilDate(Number(y), month, Number(d));
+      results.push(extracted(raw, sentence, parsed.ok ? parsed.date : null));
     }
 
     monthFirstPattern.lastIndex = 0;
     while ((match = monthFirstPattern.exec(sentence))) {
       const [raw, monthName, d, y] = match;
-      const month = MONTHS.indexOf(monthName.toLowerCase());
-      const year = y ? Number(y) : referenceYear;
-      const date = safeDate(year, month, Number(d));
-      results.push({ raw, date, context: sentence.trim() });
+      const month = monthNameToNumber(monthName);
+      if (!y) {
+        results.push(extracted(raw, sentence, null, { missingYear: true }));
+        continue;
+      }
+      if (month == null) {
+        results.push(extracted(raw, sentence, null));
+        continue;
+      }
+      const parsed = parseStrictCivilDate(Number(y), month, Number(d));
+      results.push(extracted(raw, sentence, parsed.ok ? parsed.date : null));
     }
   }
 
-  // De-duplicate by raw text, keep chronological order of first mention.
   const seen = new Set<string>();
   return results.filter((r) => {
     const key = `${r.raw}-${r.context}`;
@@ -137,16 +187,6 @@ export function extractDates(text: string, referenceYear = new Date().getFullYea
     seen.add(key);
     return true;
   });
-}
-
-function safeDate(year: number, month: number, day: number): Date | null {
-  if (month < 0 || month > 11 || day < 1 || day > 31) return null;
-  const d = new Date(year, month, day);
-  if (Number.isNaN(d.getTime())) return null;
-  // Reject implausible future dates far beyond "now" or ancient dates.
-  const now = new Date();
-  if (d.getFullYear() < now.getFullYear() - 6 || d.getFullYear() > now.getFullYear() + 1) return null;
-  return d;
 }
 
 /** Simple heuristic entity extraction: roles mentioned near capitalised names. */

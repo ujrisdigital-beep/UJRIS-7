@@ -4,13 +4,14 @@ import { inferLimitationStart } from "@/lib/legal/date-inference";
 import { calculatePrimaryLimitationDate, higherUrgency, urgencyFromDays, daysUntil } from "@/lib/legal/deadlines";
 
 describe("limitation start date inference", () => {
-  it("confirms a single clear date", () => {
+  it("holds a single clear date as provisional, never confirmed", () => {
     const dates = extractDates("I was dismissed on 11 April 2026.");
     const result = inferLimitationStart(dates);
-    expect(result.status).toBe("confirmed");
+    expect(result.status).toBe("provisional");
+    expect(result.requiresConfirmation).toBe(true);
     expect(result.selectedDate).not.toBeNull();
-    expect(result.selectedDate?.getDate()).toBe(11);
-    expect(result.selectedDate?.getMonth()).toBe(3);
+    expect(result.selectedDate?.getUTCDate()).toBe(11);
+    expect(result.selectedDate?.getUTCMonth()).toBe(3);
   });
 
   it("marks two conflicting candidate dates as ambiguous and selects the earlier as a warning", () => {
@@ -20,8 +21,8 @@ describe("limitation start date inference", () => {
     const result = inferLimitationStart(dates);
     expect(result.status).toBe("ambiguous");
     expect(result.requiresConfirmation).toBe(true);
-    expect(result.selectedDate?.getMonth()).toBe(3);
-    expect(result.selectedDate?.getDate()).toBe(11);
+    expect(result.selectedDate?.getUTCMonth()).toBe(3);
+    expect(result.selectedDate?.getUTCDate()).toBe(11);
   });
 
   it("does not treat a later event date as the limitation start when an earlier dismissal date exists", () => {
@@ -30,23 +31,19 @@ describe("limitation start date inference", () => {
     );
     const result = inferLimitationStart(dates);
     expect(result.status).toBe("ambiguous");
-    const laterWouldBeLessUrgent = urgencyFromDays(
-      daysUntil(calculatePrimaryLimitationDate(new Date(2026, 7, 1)).dueDate)
-    );
-    const conservative = urgencyFromDays(
-      daysUntil(calculatePrimaryLimitationDate(result.selectedDate as Date).dueDate)
-    );
-    expect(["high", "critical", "standard", "low"]).toContain(conservative);
-    // Picking August would lengthen the remaining window vs April — we must not do that.
-    expect(result.selectedDate?.getMonth()).toBe(3);
-    expect(laterWouldBeLessUrgent === conservative || true).toBe(true);
+    expect(result.selectedDate?.getUTCMonth()).toBe(3);
+    expect(result.selectedDate?.getUTCDate()).toBe(11);
+    const aprilDue = calculatePrimaryLimitationDate(result.selectedDate as Date).dueDate;
+    const augustDue = calculatePrimaryLimitationDate(new Date(Date.UTC(2026, 7, 1))).dueDate;
+    expect(daysUntil(aprilDue)).toBeLessThan(daysUntil(augustDue));
   });
 
   it("returns insufficient_data for invalid dates", () => {
     const dates = extractDates("It happened on 32 January 2026 and also 99/99/2026.");
     const result = inferLimitationStart(dates);
     expect(result.selectedDate).toBeNull();
-    expect(["insufficient_data", "ambiguous"]).toContain(result.status);
+    expect(result.status).toBe("insufficient_data");
+    expect(result.requiresConfirmation).toBe(true);
   });
 
   it("returns insufficient_data when no date is present", () => {
@@ -62,8 +59,8 @@ describe("limitation start date inference", () => {
     );
     const result = inferLimitationStart(reverse);
     expect(result.status).toBe("ambiguous");
-    expect(result.selectedDate?.getMonth()).toBe(2);
-    expect(result.selectedDate?.getDate()).toBe(14);
+    expect(result.selectedDate?.getUTCMonth()).toBe(2);
+    expect(result.selectedDate?.getUTCDate()).toBe(14);
   });
 
   it("does not suppress urgency when dates are uncertain but the narrative is urgent", () => {

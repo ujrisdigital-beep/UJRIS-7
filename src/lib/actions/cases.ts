@@ -85,6 +85,13 @@ export async function createCaseAction(
           basis: d.basis,
           confidence: d.confidence,
           source: "ai_inference",
+          sourceKind: d.sourceKind,
+          ruleId: d.ruleId,
+          ruleVersion: d.ruleVersion,
+          calculationInputs: d.calculationInputs,
+          sourceEventDate: d.sourceEventDate,
+          confirmationStatus: d.confirmationStatus,
+          resolutionStatus: "unresolved",
         })),
       },
       actions: {
@@ -165,14 +172,97 @@ export async function completeActionItemAction(actionId: string): Promise<void> 
   revalidatePath(`/cases/${action.caseId}`);
 }
 
-export async function acknowledgeDeadlineAction(deadlineId: string): Promise<void> {
+export type DeadlineMutationResult =
+  | { ok: true }
+  | { ok: false; error: "unauthenticated" | "forbidden" | "not_found" | "invalid" };
+
+/**
+ * Records that the owner saw the warning. Does not resolve, confirm,
+ * dismiss, extend, or reduce urgency.
+ */
+export async function acknowledgeDeadlineAction(
+  deadlineId: string,
+  clientPayload?: { urgency?: string; resolutionStatus?: string; confirmationStatus?: string }
+): Promise<DeadlineMutationResult> {
   const user = await getCurrentUser();
-  if (!user) return;
+  if (!user) return { ok: false, error: "unauthenticated" };
+  if (clientPayload?.urgency || clientPayload?.resolutionStatus === "resolved" || clientPayload?.confirmationStatus === "confirmed") {
+    return { ok: false, error: "invalid" };
+  }
   const deadline = await db.deadline.findUnique({ where: { id: deadlineId }, include: { case: true } });
-  if (!deadline || deadline.case.userId !== user.id) return;
-  await db.deadline.update({ where: { id: deadlineId }, data: { acknowledged: true } });
-  await appendAuditLog({ userId: user.id, caseId: deadline.caseId, action: "DEADLINE_ACKNOWLEDGED", detail: deadline.label });
+  if (!deadline) return { ok: false, error: "not_found" };
+  if (deadline.case.userId !== user.id) return { ok: false, error: "forbidden" };
+  await db.deadline.update({
+    where: { id: deadlineId },
+    data: { acknowledged: true, acknowledgedAt: new Date() },
+  });
+  await appendAuditLog({
+    userId: user.id,
+    caseId: deadline.caseId,
+    action: "DEADLINE_ACKNOWLEDGED",
+    detail: `label=${deadline.label}; urgency unchanged`,
+  });
   revalidatePath(`/cases/${deadline.caseId}`);
+  return { ok: true };
+}
+
+export async function confirmDeadlineAction(deadlineId: string): Promise<DeadlineMutationResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "unauthenticated" };
+  const deadline = await db.deadline.findUnique({ where: { id: deadlineId }, include: { case: true } });
+  if (!deadline) return { ok: false, error: "not_found" };
+  if (deadline.case.userId !== user.id) return { ok: false, error: "forbidden" };
+  if (!deadline.dueDate || !deadline.ruleId || !deadline.sourceEventDate) {
+    return { ok: false, error: "invalid" };
+  }
+  await db.deadline.update({
+    where: { id: deadlineId },
+    data: {
+      confirmationStatus: "confirmed",
+      confirmedAt: new Date(),
+      confirmedBy: user.id,
+      confidence: "high",
+    },
+  });
+  await appendAuditLog({
+    userId: user.id,
+    caseId: deadline.caseId,
+    action: "DEADLINE_CONFIRMED",
+    detail: `deadlineId=${deadline.id}; rule=${deadline.ruleId}@${deadline.ruleVersion}`,
+  });
+  revalidatePath(`/cases/${deadline.caseId}`);
+  return { ok: true };
+}
+
+export async function resolveDeadlineAction(
+  deadlineId: string,
+  reason: string
+): Promise<DeadlineMutationResult> {
+  const user = await getCurrentUser();
+  if (!user) return { ok: false, error: "unauthenticated" };
+  const trimmed = reason.trim();
+  if (trimmed.length < 8) return { ok: false, error: "invalid" };
+  const deadline = await db.deadline.findUnique({ where: { id: deadlineId }, include: { case: true } });
+  if (!deadline) return { ok: false, error: "not_found" };
+  if (deadline.case.userId !== user.id) return { ok: false, error: "forbidden" };
+  await db.deadline.update({
+    where: { id: deadlineId },
+    data: {
+      resolutionStatus: "resolved",
+      resolvedAt: new Date(),
+      resolvedBy: user.id,
+      resolutionReason: trimmed,
+    },
+  });
+  await appendAuditLog({
+    userId: user.id,
+    caseId: deadline.caseId,
+    action: "DEADLINE_RESOLVED",
+    detail: `deadlineId=${deadline.id}; reason=${trimmed}`,
+  });
+  await refreshCaseIntelligenceForOwner(user.id, deadline.caseId);
+  revalidatePath(`/cases/${deadline.caseId}`);
+  return { ok: true };
 }
 
 /** Recomputes readiness/urgency. Requires an authenticated owner — do not call without a session. */

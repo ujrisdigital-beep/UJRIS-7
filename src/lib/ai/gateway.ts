@@ -4,13 +4,13 @@ import {
   estimateReadinessScore,
 } from "@/lib/ai/heuristics";
 import {
-  calculatePrimaryLimitationDate,
   urgencyFromDays,
   daysUntil,
   higherUrgency,
   type Urgency,
 } from "@/lib/legal/deadlines";
 import { inferLimitationStart } from "@/lib/legal/date-inference";
+import { deriveLimitationDeadline } from "@/lib/legal/derived-deadline";
 import { SITUATION_LABELS } from "@/lib/ai/situations";
 
 /**
@@ -43,7 +43,18 @@ export interface CaseAnalysisResult {
   issues: { id: string; label: string; authority: string; confidence: "low" | "medium" | "high" }[];
   timelineEvents: { date: Date; title: string; description: string }[];
   people: { name: string; role: string }[];
-  deadlines: { label: string; dueDate: Date; basis: string; confidence: "low" | "medium" | "high" }[];
+  deadlines: {
+    label: string;
+    dueDate: Date;
+    basis: string;
+    confidence: "low" | "medium" | "high";
+    sourceKind: "source_event" | "derived_deadline";
+    ruleId: string;
+    ruleVersion: string;
+    calculationInputs: string;
+    sourceEventDate: Date | null;
+    confirmationStatus: "unconfirmed";
+  }[];
   urgency: Urgency;
   dateInference: import("@/lib/legal/date-inference").DateInferenceResult;
   readiness: number;
@@ -73,18 +84,32 @@ export async function generateCaseAnalysis(input: {
 
   const situationLabel = SITUATION_LABELS[input.situation] ?? "your situation";
 
+  const hearingOnly =
+    analysis.dates.some((d) => d.valid && d.kind === "hearing") &&
+    !analysis.dates.some((d) => d.valid && d.kind !== "hearing");
+  const derived = deriveLimitationDeadline({
+    effectiveDate: hearingOnly ? null : effectiveDate,
+    jurisdiction: "england-wales",
+    inferenceStatus: dateInference.status,
+    sourceEventKind: hearingOnly ? "hearing" : analysis.dates.find((d) => d.valid && d.kind !== "hearing")?.kind,
+  });
+
   const deadlines: CaseAnalysisResult["deadlines"] = [];
-  if (effectiveDate) {
-    const limitation = calculatePrimaryLimitationDate(effectiveDate);
-    const warning =
-      dateInference.status === "ambiguous"
-        ? " [WARNING: earliest of several candidate dates — confirm before relying on this deadline.]"
-        : "";
+  if (derived.ok && derived.dueDate) {
+    const warning = dateInference.status === "ambiguous" || dateInference.requiresConfirmation
+      ? " [WARNING: unconfirmed derived deadline — confirm before relying on this date.]"
+      : "";
     deadlines.push({
-      label: limitation.label,
-      dueDate: limitation.dueDate,
-      basis: limitation.basis + warning,
-      confidence: dateInference.status === "confirmed" ? "medium" : "low",
+      label: derived.label,
+      dueDate: derived.dueDate,
+      basis: derived.basis + warning,
+      confidence: "low",
+      sourceKind: derived.sourceKind,
+      ruleId: derived.ruleId,
+      ruleVersion: derived.ruleVersion,
+      calculationInputs: JSON.stringify(derived.calculationInputs),
+      sourceEventDate: derived.sourceEventDate,
+      confirmationStatus: "unconfirmed",
     });
   }
 

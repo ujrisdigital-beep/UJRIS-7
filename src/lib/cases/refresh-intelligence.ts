@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { estimateReadinessScore } from "@/lib/ai/heuristics";
-import { urgencyFromDays, daysUntil } from "@/lib/legal/deadlines";
+import { computeCaseUrgencyFromDeadlines } from "@/lib/legal/deadline-state";
 
 export type RefreshResult = { ok: true } | { ok: false; error: "not_found" | "forbidden" };
 
@@ -16,11 +16,7 @@ export async function refreshCaseIntelligenceForOwner(userId: string, caseId: st
   if (!kase) return { ok: false, error: "not_found" };
   if (kase.userId !== userId) return { ok: false, error: "forbidden" };
 
-  const nextDeadline = kase.deadlines
-    .filter((d) => !d.acknowledged)
-    .sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime())[0];
-
-  const urgency = nextDeadline ? urgencyFromDays(daysUntil(nextDeadline.dueDate)) : "standard";
+  const urgency = computeCaseUrgencyFromDeadlines(kase.deadlines);
 
   const readiness = estimateReadinessScore({
     evidenceCount: kase.evidence.length,

@@ -163,16 +163,29 @@ model Contradiction {
 }
 
 model Deadline {
-  id           String   @id @default(cuid())
-  caseId       String
-  case         Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
-  label        String
-  dueDate      DateTime
-  basis        String // e.g. "ACAS Early Conciliation window", "s.111 ERA 1996 3-month limitation"
-  confidence   String   @default("medium") // low | medium | high
-  source       String   @default("ai_inference")
-  acknowledged Boolean  @default(false)
-  createdAt    DateTime @default(now())
+  id                 String    @id @default(cuid())
+  caseId             String
+  case               Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  label              String
+  dueDate            DateTime
+  basis              String
+  confidence         String    @default("low")
+  source             String    @default("ai_inference")
+  acknowledged       Boolean   @default(false)
+  acknowledgedAt     DateTime?
+  resolutionStatus   String    @default("unresolved") // unresolved | resolved
+  resolvedAt         DateTime?
+  resolvedBy         String?
+  resolutionReason   String?
+  confirmationStatus String    @default("unconfirmed") // unconfirmed | confirmed
+  confirmedAt        DateTime?
+  confirmedBy        String?
+  sourceKind         String    @default("derived_deadline") // source_event | derived_deadline
+  ruleId             String?
+  ruleVersion        String?
+  calculationInputs  String?
+  sourceEventDate    DateTime?
+  createdAt          DateTime  @default(now())
 
   @@index([caseId])
 }
@@ -214,9 +227,40 @@ model Evidence {
   strength      Int       @default(0) // 0-100 heuristic evidentiary strength score
   createdAt     DateTime  @default(now())
 
-  custody CustodyEvent[]
+  custody          CustodyEvent[]
+  forensicFindings ForensicFinding[]
 
   @@index([caseId])
+}
+
+// Append-only / versioned forensic finding. Recalculation writes a new row
+// that references the superseded id. Never silently overwrite.
+model ForensicFinding {
+  id                   String    @id @default(cuid())
+  evidenceId           String
+  evidence             Evidence  @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+  findingType          String
+  schemaVersion        String
+  ruleId               String
+  ruleVersion          String
+  sourceEvidenceIds    String
+  sourceEvidenceHashes String
+  sourceTimestamps     String
+  derivedTimestamp     DateTime?
+  calculationInputs    String
+  calculationResult    String
+  createdAt            DateTime  @default(now())
+  createdBy            String
+  confirmationStatus   String    @default("unconfirmed")
+  confirmationActor    String?
+  confirmationAt       DateTime?
+  supersedesId         String?
+  supersededById       String?
+  revisionReason       String?
+  payloadHash          String
+
+  @@index([evidenceId])
+  @@index([supersedesId])
 }
 
 model CustodyEvent {
