@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# No repository secrets are required for this workflow.
+# AUTH_SECRET here is a throwaway signing key for typecheck/build/tests only.
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: typecheck-lint-test-build
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: file:./test.db
+      AUTH_SECRET: ci-test-auth-secret-not-for-production-use
+      NEXT_PUBLIC_APP_URL: http://127.0.0.1:4127
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Clean install
+        run: npm ci
+      - name: Generate Prisma client
+        run: npx prisma generate
+      - name: Apply migrations (SQLite test database)
+        run: npx prisma migrate deploy
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Unit tests
+        run: npm run test:unit
+      - name: Integration tests
+        run: npm run test:integration
+      - name: Security tests
+        run: npm run test:security
+      - name: Production build
+        run: npm run build
+
+  dependency-audit:
+    name: dependency-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: npm audit (fails on high/critical)
+        run: npm audit --audit-level=high
+
+# Playwright E2E is not part of this default workflow. Browser install is
+# heavy and the smoke suite needs a running Next.js server.
+#
+# To run E2E locally or in a dedicated job:
+#   npx playwright install --with-deps chromium
+#   npm run test:e2e
+#
+# Optional env:
+#   PLAYWRIGHT_BASE_URL=http://127.0.0.1:4127
+#   PLAYWRIGHT_SKIP_WEBSERVER=1   # if a server is already listening

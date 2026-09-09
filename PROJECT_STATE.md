@@ -5,7 +5,7 @@
 > and what's next. Update it as part of every ticket — a ticket is not
 > done until this file reflects reality.
 
-Last updated: 2026-09-09 (ticket: brand asset integration — see Ticket Log).
+Last updated: 2026-09-09 (ticket: Step 2A security stabilisation + test foundation — see Ticket Log).
 
 ## 1. What UJRIS is
 
@@ -27,19 +27,26 @@ full record. Summary:
 - Prisma ORM → local SQLite (`prisma/dev.db`, git-ignored). Schema is
   written to be Postgres-portable but Postgres is not wired up yet.
 - Custom auth: bcrypt + `jose` HS256 JWT in an `httpOnly` cookie
-  (`src/lib/auth.ts`). **Not** Supabase Auth yet.
+  (`src/lib/auth.ts`), now bound to an `AuthSession` row (`jti`) so logout
+  can revoke a captured token. **Interim** — **not** Supabase Auth yet.
+  In-memory auth rate limiting exists (single-process, not production-grade).
 - Authorization: every server action / route handler re-checks
   `record.userId === session.userId` before reading/writing. No RLS yet
   (SQLite has none; Postgres/RLS migration is ADR-0002, not started).
 - Evidence files: local disk under `data/evidence/` (git-ignored), served
   only via an authenticated, ownership-checked route
-  (`src/app/api/evidence/[evidenceId]/file/route.ts`). No object storage,
-  no signed URLs yet.
+  (`src/app/api/evidence/[evidenceId]/file/route.ts`) as **attachments**
+  with `nosniff`; HTML/SVG/JS are forced to `application/octet-stream` and
+  are never inlined on the application origin. No object storage, no
+  signed URLs yet. Evidence row + custody event are written in one Prisma
+  transaction. Integrity verification recomputes SHA-256 of current bytes
+  against the stored original hash and never overwrites that hash.
 - Billing: real Stripe subscription-mode Checkout wiring
-  (`src/lib/actions/billing.ts`, `src/app/api/billing/webhook/route.ts`),
-  with a clearly-audited local "dev mode" fallback when no Stripe keys are
-  configured (`SUBSCRIPTION_DEV_MODE_ACTIVATED` audit event — never
-  confused with a real payment).
+  (`src/lib/actions/billing.ts`, `src/app/api/billing/webhook/route.ts`).
+  **Missing Stripe configuration does not grant a paid plan.** A
+  development simulation exists only if `UJRIS_ALLOW_DEV_BILLING=true`
+  and `NODE_ENV` is not `production` (`SUBSCRIPTION_DEV_MODE_ACTIVATED`
+  audit event — never confused with a real payment).
 - AI: deterministic, zero-dependency heuristic engine for signal
   extraction, deadline calculation, and document drafting
   (`src/lib/ai/*`, `src/lib/legal/*`). Optional OpenAI call only *phrases*
@@ -50,6 +57,14 @@ full record. Summary:
   **not yet** the fully structured, per-finding schema the charter
   requires (`finding_type`/`confidence`/`limitations`/`source+version`/
   etc. as discrete rows) — currently a single JSON blob on `Evidence`.
+  Timestamp rule F-TS-001 is deterministic (`src/lib/forensics/timestamps.ts`).
+  Target finding tables are designed in
+  [`docs/architecture/FORENSIC_DOCUMENT_INSPECTOR.md`](docs/architecture/FORENSIC_DOCUMENT_INSPECTOR.md)
+  (design only).
+- Automated tests: Vitest (unit / integration / security) + Playwright
+  smoke E2E. GitHub Actions runs typecheck, lint, Vitest, production build,
+  and `npm audit` (audit is visibility for High/Critical; it is not
+  auto-ignored). See `docs/security/SECURITY_REGRESSION_MATRIX.md`.
 
 **Target architecture** (Supabase Postgres + Supabase Auth + RLS + Stripe
 as sole entitlement writer + structured forensic findings + FACT/INFERENCE/
@@ -98,16 +113,23 @@ table by table, never as a single rewrite.
   (404). `AppHeader`/landing links to `/pricing` and `/billing` — same.
   This predates this ticket (ADR-0001 baseline) and is **not** fixed here;
   it needs its own scoped ticket(s) per page.
-- No RLS, no Supabase — see ADR-0002.
-- No automated tests exist (unit/integration/E2E) for any area.
-- No AI usage/cost observability.
-- Forensic findings are a JSON blob, not the structured per-finding rows
-  the charter requires.
+- No RLS, no Supabase — see ADR-0002. **Do not start Supabase in a
+  follow-on until Step 2A independent review passes.**
+- Playwright E2E is smoke-only (landing + login) and is **not** in the
+  default CI workflow — run `npx playwright install --with-deps chromium`
+  then `npm run test:e2e`.
+- No AI usage/cost observability / grounding validation (Codex finding 10;
+  out of scope for Step 2A).
+- Forensic findings are still a JSON blob at runtime; schema is design-only.
 - `middleware.ts` uses a convention Next.js 16 has deprecated in favour of
   `proxy.ts` (still functions; not yet migrated — low priority, tracked
-  here so it isn't mistaken for an oversight).
-- `next.config.ts`, ESLint, and Tailwind configs are default/minimal —
-  no CI pipeline configured in this repo yet.
+  here so it isn't mistaken for an oversight). Cookie *presence* only —
+  revocation is enforced in Node `verifySessionToken`, not at the edge.
+- **STITCH UX REVIEW: PENDING AUTHENTICATED ACCESS.** The Stitch prototype
+  remains an authoritative UX reference, but independent review could not
+  open it because Google sign-in blocked access. No design findings have
+  been invented from that gap. Do not redesign UI until authenticated
+  access exists.
 
 ## 5. Environment & secrets
 
@@ -117,7 +139,8 @@ for enabling non-fallback behaviour:
 | Variable | Effect if set | Effect if unset |
 |---|---|---|
 | `OPENAI_API_KEY` | UJU Brief prose is phrased by a real model (facts still come only from the deterministic extractor) | Deterministic template phrasing is used |
-| `STRIPE_SECRET_KEY` + `STRIPE_PRICE_PROTECT`/`STRIPE_PRICE_ADVOCATE` + `STRIPE_WEBHOOK_SECRET` | Real Stripe Checkout + webhook-driven entitlements | Local "dev mode" simulated subscription (clearly audited) |
+| `STRIPE_SECRET_KEY` + `STRIPE_PRICE_PROTECT`/`STRIPE_PRICE_ADVOCATE` + `STRIPE_WEBHOOK_SECRET` | Real Stripe Checkout + webhook-driven entitlements | Paid checkout **fails closed** — no paid plan is granted |
+| `UJRIS_ALLOW_DEV_BILLING=true` | Non-production only: simulated paid activation (`SUBSCRIPTION_DEV_MODE_ACTIVATED`). Ignored when `NODE_ENV=production`. | Unset (default): no simulation |
 | `AUTH_SECRET` | Required in production (app refuses to boot without a real one); dev has an insecure fallback with a console warning | — |
 
 No Supabase variables exist yet — they will be introduced by the first
@@ -132,11 +155,43 @@ npx prisma migrate deploy   # creates/updates prisma/dev.db
 npm run dev -- -p 4127      # http://localhost:4127
 ```
 
-`npx tsc --noEmit`, `npx eslint .`, and `npm run build` should all pass
-cleanly before any ticket is considered done — see Ticket Log for the last
-verified run of each.
+`npm run typecheck`, `npm run lint`, `npm run test`, and `npm run build`
+should all pass cleanly before any ticket is considered done — see Ticket
+Log for the last verified run of each.
 
 ## 7. Ticket log
+
+### 2026-09-09 — Step 2A: security stabilisation + automated test foundation
+
+Branch: `step-2a-security-test-foundation` (not merged to `main`).
+Supabase: **not started**. UI: **not redesigned**. Forensic inspector:
+**design only**.
+
+**STITCH UX REVIEW: PENDING AUTHENTICATED ACCESS**
+
+**What changed:**
+- Vitest + Playwright test foundation; GitHub Actions CI.
+- Evidence downloads cannot execute HTML/SVG/JS on the app origin.
+- Auth rate limiting (in-memory, documented interim) + session `jti`
+  revocation via `AuthSession`.
+- Billing fail-closed when Stripe is missing.
+- Conservative/ambiguous deadline inference; forensic timestamp rule
+  F-TS-001 no longer treats reversed timestamps as “later revision”.
+- Evidence + custody in a Prisma transaction; SHA-256 recompute
+  verification; ownership on `refreshCaseIntelligence`.
+- Docs: `docs/implementation/STEP2A_PLAN.md`,
+  `docs/implementation/STEP2A_IMPLEMENTATION_REPORT.md`,
+  `docs/security/SECURITY_REGRESSION_MATRIX.md`,
+  `docs/architecture/FORENSIC_DOCUMENT_INSPECTOR.md`.
+
+**Database:** additive `AuthSession` table only.
+
+**Requires independent review:** YES — send this branch to Codex for
+Step 2A adversarial verification. Do not merge to `main` from this ticket.
+Do not begin Supabase until that review passes.
+
+See the implementation report for command output, residual risks, and
+what will be superseded during the Supabase migration.
 
 ### 2026-09-09 — Governance bootstrap + brand asset integration
 

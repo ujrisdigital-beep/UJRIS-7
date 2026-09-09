@@ -29,18 +29,40 @@ npx prisma migrate deploy    # creates/updates prisma/dev.db (SQLite)
 npm run dev -- -p 4127       # http://localhost:4127
 ```
 
-By default the app runs entirely on local SQLite, a deterministic
-heuristic "AI" engine, and a simulated Stripe "dev mode" — no external
-credentials needed to demo the full product. See `PROJECT_STATE.md` §5 for
-what each optional environment variable unlocks (a real OpenAI-phrased UJU
-Brief, real Stripe billing, etc.), and ADR-0002 for the planned Supabase
-migration.
+By default the app runs entirely on local SQLite and a deterministic
+heuristic "AI" engine. Missing Stripe configuration does **not** grant a
+paid plan. Local billing simulation is available only when
+`UJRIS_ALLOW_DEV_BILLING=true` and `NODE_ENV` is not `production`. See
+`PROJECT_STATE.md` §5, and ADR-0002 for the planned Supabase migration.
+
+## Tests
+
+```bash
+npm ci                  # also runs prisma generate (postinstall)
+npx prisma migrate deploy
+npm run typecheck
+npm run lint
+npm run test            # unit + integration + security (Vitest)
+npm run test:unit
+npm run test:integration
+npm run test:security
+npm run test:audit      # npm audit --audit-level=high (may fail on upstream advisories)
+npm run build
+```
+
+Playwright E2E is **not** part of the default GitHub Actions workflow.
+
+```bash
+npx playwright install --with-deps chromium
+npm run test:e2e        # starts Next on :4127 unless PLAYWRIGHT_SKIP_WEBSERVER=1
+```
 
 ## Checks before every change is considered done
 
 ```bash
-npx tsc --noEmit
-npx eslint .
+npm run typecheck
+npm run lint
+npm run test
 npm run build
 ```
 
