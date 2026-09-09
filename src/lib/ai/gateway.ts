@@ -1,14 +1,16 @@
 import {
   analyzeNarrative,
   detectIssues,
-  suggestEffectiveDate,
   estimateReadinessScore,
 } from "@/lib/ai/heuristics";
 import {
   calculatePrimaryLimitationDate,
   urgencyFromDays,
   daysUntil,
+  higherUrgency,
+  type Urgency,
 } from "@/lib/legal/deadlines";
+import { inferLimitationStart } from "@/lib/legal/date-inference";
 import { SITUATION_LABELS } from "@/lib/ai/situations";
 
 /**
@@ -42,7 +44,8 @@ export interface CaseAnalysisResult {
   timelineEvents: { date: Date; title: string; description: string }[];
   people: { name: string; role: string }[];
   deadlines: { label: string; dueDate: Date; basis: string; confidence: "low" | "medium" | "high" }[];
-  urgency: "low" | "standard" | "high" | "critical";
+  urgency: Urgency;
+  dateInference: import("@/lib/legal/date-inference").DateInferenceResult;
   readiness: number;
   nextBestAction: { title: string; description: string };
   ujuBrief: {
@@ -65,23 +68,29 @@ export async function generateCaseAnalysis(input: {
 }): Promise<CaseAnalysisResult> {
   const analysis = analyzeNarrative(input.narrative);
   const issues = detectIssues(input.narrative);
-  const effectiveDate = suggestEffectiveDate(analysis.dates);
+  const dateInference = inferLimitationStart(analysis.dates);
+  const effectiveDate = dateInference.selectedDate;
 
   const situationLabel = SITUATION_LABELS[input.situation] ?? "your situation";
 
   const deadlines: CaseAnalysisResult["deadlines"] = [];
   if (effectiveDate) {
     const limitation = calculatePrimaryLimitationDate(effectiveDate);
+    const warning =
+      dateInference.status === "ambiguous"
+        ? " [WARNING: earliest of several candidate dates — confirm before relying on this deadline.]"
+        : "";
     deadlines.push({
       label: limitation.label,
       dueDate: limitation.dueDate,
-      basis: limitation.basis,
-      confidence: "medium",
+      basis: limitation.basis + warning,
+      confidence: dateInference.status === "confirmed" ? "medium" : "low",
     });
   }
 
-  const urgencyDays = deadlines[0] ? daysUntil(deadlines[0].dueDate) : 90;
-  const urgency = analysis.hasUrgencySignal ? "high" : urgencyFromDays(urgencyDays);
+  const keywordUrgency: Urgency = analysis.hasUrgencySignal ? "high" : "low";
+  const deadlineUrgency: Urgency = deadlines[0] ? urgencyFromDays(daysUntil(deadlines[0].dueDate)) : "low";
+  const urgency = higherUrgency(keywordUrgency, deadlineUrgency);
 
   const timelineEvents = analysis.dates
     .filter((d) => d.date !== null)
@@ -131,9 +140,14 @@ export async function generateCaseAnalysis(input: {
         ? `You've uploaded ${input.evidenceCount} piece(s) of evidence. UJRIS will connect these to your timeline as you add more detail.`
         : "No evidence has been uploaded yet. Preserving documents, messages, or emails related to this situation is usually the most valuable next step.",
     uncertain:
-      issues.length > 0
-        ? "UJRIS has identified possible legal issues from keywords in your description — these are starting points, not conclusions. A legal adviser can confirm which, if any, apply to your situation."
-        : "UJRIS needs more detail before it can suggest which legal or procedural issues may be relevant.",
+      [
+        issues.length > 0
+          ? "UJRIS has identified possible legal issues from keywords in your description — these are starting points, not conclusions. A legal adviser can confirm which, if any, apply to your situation."
+          : "UJRIS needs more detail before it can suggest which legal or procedural issues may be relevant.",
+        dateInference.status === "ambiguous" || dateInference.status === "insufficient_data" ? dateInference.reason : null,
+      ]
+        .filter(Boolean)
+        .join(" "),
     keyDates: timelineEvents.map((e) => `${e.date.toDateString()} — ${e.title}`),
     keyPeople: analysis.people.map((p) => `${p.name} (${p.role})`),
     nextBestAction: nextBestAction.description,
@@ -147,6 +161,7 @@ export async function generateCaseAnalysis(input: {
     people: analysis.people,
     deadlines,
     urgency,
+    dateInference,
     readiness,
     nextBestAction,
     ujuBrief,

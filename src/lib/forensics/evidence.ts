@@ -2,6 +2,7 @@ import exifr from "exifr";
 import { PDFDocument } from "pdf-lib";
 import { differenceInCalendarDays } from "date-fns";
 import { sha256Buffer } from "@/lib/hash-chain";
+import { evaluateTimestampAnomaly } from "@/lib/forensics/timestamps";
 
 /**
  * Forensic / metadata analysis for uploaded evidence.
@@ -122,13 +123,13 @@ async function analyzeImage(
 
   if (createDate && modifyDate) {
     metadata.readableModifyDate = modifyDate.toISOString();
-    const editGap = Math.abs(differenceInCalendarDays(modifyDate, createDate));
-    if (editGap > 1) {
+    const anomaly = evaluateTimestampAnomaly(createDate, modifyDate);
+    if (anomaly.findingType && anomaly.title && anomaly.detail) {
       flags.push({
-        id: "edited_after_capture",
+        id: anomaly.findingType,
         severity: "attention",
-        title: "Image was modified after it was originally captured",
-        detail: `Captured ${createDate.toDateString()}, last modified ${modifyDate.toDateString()} (${editGap} day(s) later). This can be entirely normal (e.g. cropping, re-saving) but is worth noting if the image's authenticity is disputed.`,
+        title: anomaly.title,
+        detail: anomaly.detail,
       });
     }
   }
@@ -195,13 +196,13 @@ async function analyzePdf(
     }
 
     if (creationDate && modificationDate) {
-      const editGap = Math.abs(differenceInCalendarDays(modificationDate, creationDate));
-      if (editGap > 1) {
+      const anomaly = evaluateTimestampAnomaly(creationDate, modificationDate);
+      if (anomaly.findingType && anomaly.title && anomaly.detail) {
         flags.push({
-          id: "edited_after_creation",
+          id: anomaly.findingType,
           severity: "attention",
-          title: "Document was modified after it was created",
-          detail: `Created ${creationDate.toDateString()}, last modified ${modificationDate.toDateString()} (${editGap} day(s) later). If the content or dates of this document are disputed, this gap may be relevant.`,
+          title: anomaly.title,
+          detail: anomaly.detail,
         });
       }
     }

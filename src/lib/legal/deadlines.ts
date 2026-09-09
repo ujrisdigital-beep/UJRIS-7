@@ -79,10 +79,19 @@ export function daysUntil(date: Date): number {
   return differenceInCalendarDays(date, new Date());
 }
 
-export function urgencyFromDays(days: number): "low" | "standard" | "high" | "critical" {
+export type Urgency = "low" | "standard" | "high" | "critical";
+
+const URGENCY_RANK: Record<Urgency, number> = { low: 0, standard: 1, high: 2, critical: 3 };
+
+export function urgencyFromDays(days: number): Urgency {
   if (days < 0) return "critical";
   if (days <= 7) return "critical";
   if (days <= 21) return "high";
   if (days <= 45) return "standard";
   return "low";
+}
+
+/** Uncertainty must not suppress a more urgent signal. */
+export function higherUrgency(a: Urgency, b: Urgency): Urgency {
+  return URGENCY_RANK[a] >= URGENCY_RANK[b] ? a : b;
 }

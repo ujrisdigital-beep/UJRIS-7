@@ -231,11 +231,11 @@ export function analyzeNarrative(text: string): NarrativeAnalysis {
   };
 }
 
-/** Suggest a most-likely "effective date" (dismissal/incident) for deadline calculation: the latest mentioned date. */
+/** @deprecated Prefer inferLimitationStart — picking the latest date suppresses urgency. */
 export function suggestEffectiveDate(dates: ExtractedDate[]): Date | null {
   const valid = dates.map((d) => d.date).filter((d): d is Date => d !== null);
   if (valid.length === 0) return null;
-  return valid.reduce((latest, d) => (d > latest ? d : latest), valid[0]);
+  return valid.reduce((earliest, d) => (d < earliest ? d : earliest), valid[0]);
 }
 
 export function estimateReadinessScore(input: {
