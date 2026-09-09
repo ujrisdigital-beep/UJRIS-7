@@ -46,7 +46,12 @@ next-env.d.ts
 # local dev database & private evidence storage — never commit real data
 /prisma/dev.db
 /prisma/dev.db-journal
+/prisma/test.db
+/prisma/test.db-journal
 /data/
+/test-results/
+/playwright-report/
+/blob-report/
 
 # uploaded reference docs used to seed this task (not part of the app)
 /uploads/
