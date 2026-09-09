@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
 import { entitlementsFor } from "@/lib/plans";
 import { appendAuditLog } from "@/lib/audit";
+import { persistEvidenceWithCustody } from "@/lib/evidence-persist";
 import { GENESIS_HASH, computeChainHash } from "@/lib/hash-chain";
 import { analyzeEvidenceFile, evidenceStrengthScore } from "@/lib/forensics/evidence";
 import { relativeEvidencePath, saveEvidenceFile, MAX_UPLOAD_BYTES, ALLOWED_MIME_TYPES } from "@/lib/storage";
@@ -74,8 +75,8 @@ export async function uploadEvidenceAction(
   const relPath = relativeEvidencePath(kase.id, evidenceId, file.name);
   await saveEvidenceFile(relPath, buffer);
 
-  await db.evidence.create({
-    data: {
+  try {
+    await persistEvidenceWithCustody({
       id: evidenceId,
       caseId: kase.id,
       fileName: file.name,
@@ -86,30 +87,13 @@ export async function uploadEvidenceAction(
       category: parsed.data.category,
       claimedDate,
       description: parsed.data.description ?? null,
-      forensics: JSON.stringify({ metadata: forensics.metadata, flags: forensics.flags }),
+      forensicsJson: JSON.stringify({ metadata: forensics.metadata, flags: forensics.flags }),
       strength,
-    },
-  });
-
-  const uploadTimestamp = new Date().toISOString();
-  const uploadChainHash = computeChainHash({
-    prevHash: GENESIS_HASH,
-    id: evidenceId,
-    timestamp: uploadTimestamp,
-    action: "uploaded",
-    detail: forensics.sha256,
-  });
-  await db.custodyEvent.create({
-    data: {
-      evidenceId,
-      action: "uploaded",
       actorId: user.id,
-      detail: `sha256:${forensics.sha256}`,
-      prevHash: GENESIS_HASH,
-      chainHash: uploadChainHash,
-      createdAt: new Date(uploadTimestamp),
-    },
-  });
+    });
+  } catch {
+    return { ok: false, error: "Could not save this evidence. Please try again." };
+  }
 
   const reviewFlags = forensics.flags.filter((f) => f.severity === "review");
   if (reviewFlags.length > 0) {
