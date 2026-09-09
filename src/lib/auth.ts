@@ -3,14 +3,13 @@ import { cookies } from "next/headers";
 import bcrypt from "bcryptjs";
 import { db } from "@/lib/db";
 
-const SESSION_COOKIE = "ujris_session";
+export const SESSION_COOKIE = "ujris_session";
 const SESSION_DURATION_SECONDS = 60 * 60 * 24 * 7; // 7 days
 
 function getAuthSecret(): Uint8Array {
   const secret = process.env.AUTH_SECRET;
   if (!secret || secret.length < 16) {
     if (process.env.NODE_ENV === "production") {
-      // Never allow a production boot without a real, operator-provided secret.
       throw new Error(
         "AUTH_SECRET is missing or too short. Set a long random AUTH_SECRET environment variable before starting UJRIS in production."
       );
@@ -28,6 +27,7 @@ export interface SessionPayload {
   email: string;
   name: string;
   role: string;
+  jti: string;
 }
 
 export async function hashPassword(password: string): Promise<string> {
@@ -38,31 +38,68 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   return bcrypt.compare(password, hash);
 }
 
-export async function createSessionToken(payload: SessionPayload): Promise<string> {
-  return new SignJWT({ ...payload })
+/**
+ * Issue a JWT bound to a server-side AuthSession row (`jti`).
+ * Interim until Supabase Auth. Tokens are not stored in plaintext.
+ */
+export async function issueSession(payload: Omit<SessionPayload, "jti">): Promise<{ token: string; jti: string }> {
+  const jti = crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + SESSION_DURATION_SECONDS * 1000);
+  await db.authSession.create({
+    data: {
+      id: jti,
+      userId: payload.userId,
+      expiresAt,
+    },
+  });
+  const token = await new SignJWT({ userId: payload.userId, email: payload.email, name: payload.name, role: payload.role })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
+    .setJti(jti)
     .setExpirationTime(`${SESSION_DURATION_SECONDS}s`)
     .sign(getAuthSecret());
+  return { token, jti };
+}
+
+export async function createSessionToken(payload: Omit<SessionPayload, "jti">): Promise<string> {
+  const { token } = await issueSession(payload);
+  return token;
+}
+
+export async function revokeSession(jti: string): Promise<void> {
+  await db.authSession.updateMany({
+    where: { id: jti, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
 }
 
 export async function verifySessionToken(token: string): Promise<SessionPayload | null> {
   try {
     const { payload } = await jwtVerify(token, getAuthSecret());
     if (typeof payload.userId !== "string") return null;
+    const jti = typeof payload.jti === "string" ? payload.jti : null;
+    if (!jti) return null;
+
+    const session = await db.authSession.findUnique({ where: { id: jti } });
+    if (!session) return null;
+    if (session.revokedAt) return null;
+    if (session.expiresAt.getTime() <= Date.now()) return null;
+    if (session.userId !== payload.userId) return null;
+
     return {
       userId: payload.userId,
       email: payload.email as string,
       name: payload.name as string,
       role: payload.role as string,
+      jti,
     };
   } catch {
     return null;
   }
 }
 
-export async function setSessionCookie(payload: SessionPayload) {
-  const token = await createSessionToken(payload);
+export async function setSessionCookie(payload: Omit<SessionPayload, "jti">) {
+  const { token } = await issueSession(payload);
   const store = await cookies();
   store.set(SESSION_COOKIE, token, {
     httpOnly: true,
@@ -85,10 +122,6 @@ export async function getSession(): Promise<SessionPayload | null> {
   return verifySessionToken(token);
 }
 
-/**
- * Server-authoritative current user + plan lookup. Never trust a client-side
- * plan flag — entitlements are always re-derived from the database.
- */
 export async function getCurrentUser() {
   const session = await getSession();
   if (!session) return null;
@@ -97,4 +130,25 @@ export async function getCurrentUser() {
     include: { subscription: true },
   });
   return user;
+}
+
+/** Logout: revoke the jti then drop the cookie. A captured copy of the JWT then fails verifySessionToken. */
+export async function revokeCurrentSessionAndClearCookie(): Promise<void> {
+  const store = await cookies();
+  const token = store.get(SESSION_COOKIE)?.value;
+  if (token) {
+    const session = await verifySessionToken(token);
+    if (session) {
+      await revokeSession(session.jti);
+    } else {
+      // Token may already be invalid; still try to extract jti without the active-session check.
+      try {
+        const { payload } = await jwtVerify(token, getAuthSecret());
+        if (typeof payload.jti === "string") await revokeSession(payload.jti);
+      } catch {
+        // ignore
+      }
+    }
+  }
+  await clearSessionCookie();
 }

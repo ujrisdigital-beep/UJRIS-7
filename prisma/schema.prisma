@@ -32,9 +32,26 @@ model User {
   cases         Case[]
   auditLogs     AuditLog[]
   subscription  Subscription?
+  authSessions  AuthSession[]
   creditBalance Int           @default(0)
 
   @@index([email])
+}
+
+// Interim custom-auth session row (JWT `jti`). Logout sets revokedAt so a
+// captured cookie cannot be replayed. This table is superseded when we
+// migrate to Supabase Auth (ADR-0002) and should not be treated as the
+// long-term session architecture.
+model AuthSession {
+  id        String    @id // JWT jti
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([userId])
 }
 
 model Subscription {

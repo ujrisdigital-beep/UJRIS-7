@@ -3,8 +3,20 @@
 import { z } from "zod";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
-import { hashPassword, verifyPassword, setSessionCookie, clearSessionCookie } from "@/lib/auth";
+import {
+  hashPassword,
+  verifyPassword,
+  setSessionCookie,
+  revokeCurrentSessionAndClearCookie,
+} from "@/lib/auth";
 import { appendAuditLog } from "@/lib/audit";
+import {
+  consumeAuthRateLimit,
+  loginRateLimitKey,
+  signupRateLimitKey,
+  GENERIC_AUTH_ERROR,
+  RATE_LIMITED_MESSAGE,
+} from "@/lib/rate-limit";
 
 const DISPOSABLE_DOMAINS = new Set(["mailinator.com", "tempmail.com", "10minutemail.com", "guerrillamail.com", "yopmail.com"]);
 
@@ -29,6 +41,12 @@ export async function signupAction(_prev: AuthActionResult | undefined, formData
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid details" };
   }
   const { name, email, password } = parsed.data;
+
+  const rate = consumeAuthRateLimit(signupRateLimitKey(email));
+  if (!rate.allowed) {
+    return { ok: false, error: RATE_LIMITED_MESSAGE };
+  }
+
   const domain = email.split("@")[1];
   if (domain && DISPOSABLE_DOMAINS.has(domain)) {
     return { ok: false, error: "Please use a permanent email address." };
@@ -70,14 +88,22 @@ export async function loginAction(_prev: AuthActionResult | undefined, formData:
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid details" };
   }
   const { email, password } = parsed.data;
+
+  // Consume before looking up the user so rate-limit behaviour cannot be used
+  // to distinguish existing vs missing accounts.
+  const rate = consumeAuthRateLimit(loginRateLimitKey(email));
+  if (!rate.allowed) {
+    return { ok: false, error: RATE_LIMITED_MESSAGE };
+  }
+
   const user = await db.user.findUnique({ where: { email } });
   if (!user) {
-    return { ok: false, error: "Incorrect email or password." };
+    return { ok: false, error: GENERIC_AUTH_ERROR };
   }
   const valid = await verifyPassword(password, user.passwordHash);
   if (!valid) {
     await appendAuditLog({ userId: user.id, action: "LOGIN_FAILED", detail: `email=${email}` });
-    return { ok: false, error: "Incorrect email or password." };
+    return { ok: false, error: GENERIC_AUTH_ERROR };
   }
 
   await appendAuditLog({ userId: user.id, action: "USER_LOGGED_IN" });
@@ -88,6 +114,6 @@ export async function loginAction(_prev: AuthActionResult | undefined, formData:
 }
 
 export async function logoutAction(): Promise<void> {
-  await clearSessionCookie();
+  await revokeCurrentSessionAndClearCookie();
   redirect("/");
 }
