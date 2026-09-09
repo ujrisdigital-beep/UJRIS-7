@@ -1,0 +1,277 @@
+// UJRIS data model — the "Case Twin".
+//
+// Provider is SQLite for zero-config local/demo use. To move to production
+// Postgres: change `provider` below to "postgresql", point DATABASE_URL at
+// your Postgres instance, then run `npx prisma migrate dev`. The schema
+// deliberately avoids SQLite-only or Postgres-only features so this swap
+// does not require remodelling.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Identity & organisations
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         String   @default("claimant") // claimant | adviser | admin
+  plan         String   @default("free") // free | protect | advocate | practice
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  cases         Case[]
+  auditLogs     AuditLog[]
+  subscription  Subscription?
+  creditBalance Int           @default(0)
+
+  @@index([email])
+}
+
+model Subscription {
+  id                   String    @id @default(cuid())
+  userId               String    @unique
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan                 String    @default("free") // free | protect | advocate | practice
+  status               String    @default("active") // active | trialing | past_due | canceled
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean   @default(false)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// The Case Twin
+// ---------------------------------------------------------------------------
+
+model Case {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title        String
+  situation    String // the onboarding category selected, e.g. "discrimination"
+  narrative    String // free-text "what happened" from the user (Layer 1 - user assertion)
+  jurisdiction String   @default("england-wales")
+  status       String   @default("active") // active | resolved | archived
+  stage        String   @default("understand") // resolution ladder stage
+  readiness    Int      @default(0) // Case Readiness Score 0-100
+  urgency      String   @default("standard") // low | standard | high | critical
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  evidence       Evidence[]
+  events         CaseEvent[]
+  people         Person[]
+  issues         Issue[]
+  deadlines      Deadline[]
+  actions        ActionItem[]
+  documents      GeneratedDocument[]
+  contradictions Contradiction[]
+  briefs         UjuBrief[]
+  auditLogs      AuditLog[]
+
+  @@index([userId])
+}
+
+// A person/entity referenced in the case (claimant, employer, HR, manager, witness...)
+model Person {
+  id     String @id @default(cuid())
+  caseId String
+  case   Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  name   String
+  role   String // e.g. "You", "Employer", "HR", "Manager", "Witness"
+
+  createdAt DateTime @default(now())
+
+  @@index([caseId])
+}
+
+// A single dated event on the case timeline.
+model CaseEvent {
+  id          String   @id @default(cuid())
+  caseId      String
+  case        Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  date        DateTime
+  title       String
+  description String
+  source      String   @default("ai_inference") // TruthLayer: user_assertion | document_evidence | ai_inference | human_verified
+  evidenceId  String?
+  createdAt   DateTime @default(now())
+
+  @@index([caseId])
+}
+
+// A legal/procedural issue potentially engaged by the case.
+model Issue {
+  id                        String   @id @default(cuid())
+  caseId                    String
+  case                      Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  title                     String
+  description               String
+  basis                     String // evidence references supporting this
+  authority                 String? // relevant statutory provision (heuristic, non-authoritative)
+  confidence                String   @default("medium") // low | medium | high
+  missingInformation        String?
+  alternativeInterpretation String?
+  createdAt                 DateTime @default(now())
+
+  @@index([caseId])
+}
+
+// A contradiction between two assertions/evidence items (the "Anchor Claim" lens).
+model Contradiction {
+  id                     String   @id @default(cuid())
+  caseId                 String
+  case                   Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  anchorClaim            String // the central claim the opponent's position appears to depend on
+  supportingEvidenceIds  String // JSON array of Evidence ids
+  conflictingEvidenceIds String // JSON array of Evidence ids
+  explanation            String
+  alternativeExplanation String?
+  significance           String   @default("medium") // low | medium | high
+  createdAt              DateTime @default(now())
+
+  @@index([caseId])
+}
+
+model Deadline {
+  id           String   @id @default(cuid())
+  caseId       String
+  case         Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  label        String
+  dueDate      DateTime
+  basis        String // e.g. "ACAS Early Conciliation window", "s.111 ERA 1996 3-month limitation"
+  confidence   String   @default("medium") // low | medium | high
+  source       String   @default("ai_inference")
+  acknowledged Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@index([caseId])
+}
+
+model ActionItem {
+  id          String    @id @default(cuid())
+  caseId      String
+  case        Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  title       String
+  description String
+  status      String    @default("pending") // pending | in_progress | done | dismissed
+  kind        String    @default("general") // preserve_evidence | send_document | review_contradiction | acknowledge_deadline | general
+  priority    String    @default("medium") // low | medium | high
+  linkTo      String? // optional relative path to link the action to (e.g. an evidence id or document id)
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([caseId])
+}
+
+// ---------------------------------------------------------------------------
+// Evidence intelligence
+// ---------------------------------------------------------------------------
+
+model Evidence {
+  id            String    @id @default(cuid())
+  caseId        String
+  case          Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  fileName      String
+  mimeType      String
+  sizeBytes     Int
+  storagePath   String // relative path under the app's private evidence store
+  sha256        String
+  category      String    @default("document") // email | document | image | audio | other
+  claimedDate   DateTime? // date the user says this evidence relates to
+  description   String?
+  extractedText String?
+  forensics     String? // JSON blob: metadata extraction + integrity flags
+  strength      Int       @default(0) // 0-100 heuristic evidentiary strength score
+  createdAt     DateTime  @default(now())
+
+  custody CustodyEvent[]
+
+  @@index([caseId])
+}
+
+model CustodyEvent {
+  id         String   @id @default(cuid())
+  evidenceId String
+  evidence   Evidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+  action     String // uploaded | hash_verified | viewed | exported | flagged
+  actorId    String?
+  detail     String?
+  chainHash  String // sha256(prevHash | id | timestamp | action | detail)
+  prevHash   String
+  createdAt  DateTime @default(now())
+
+  @@index([evidenceId])
+}
+
+// ---------------------------------------------------------------------------
+// Action Engine outputs
+// ---------------------------------------------------------------------------
+
+model GeneratedDocument {
+  id          String   @id @default(cuid())
+  caseId      String
+  case        Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  kind        String // grievance_letter | sar_request | et1_particulars | witness_statement | settlement_proposal | chronology
+  title       String
+  content     String // markdown content
+  version     Int      @default(1)
+  status      String   @default("draft") // draft | approved | sent
+  assumptions String? // JSON array of assumptions made while drafting
+  createdAt   DateTime @default(now())
+
+  @@index([caseId])
+}
+
+// ---------------------------------------------------------------------------
+// UJU Brief — the "anchor document"
+// ---------------------------------------------------------------------------
+
+model UjuBrief {
+  id                   String   @id @default(cuid())
+  caseId               String
+  case                 Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  whatHappened         String
+  whatMatters          String
+  supportedByEvidence  String
+  uncertain            String
+  keyDates             String // JSON array
+  keyPeople            String // JSON array
+  nextBestAction       String
+  questionsOutstanding String // JSON array
+  createdAt            DateTime @default(now())
+
+  @@index([caseId])
+}
+
+// ---------------------------------------------------------------------------
+// Audit trail (tamper-evident hash chain)
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  caseId    String?
+  case      Case?    @relation(fields: [caseId], references: [id])
+  action    String
+  detail    String?
+  chainHash String
+  prevHash  String
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([caseId])
+}
