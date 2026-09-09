@@ -38,16 +38,13 @@ paid plan. Local billing simulation is available only when
 ## Tests
 
 ```bash
-npm ci                  # also runs prisma generate (postinstall)
-npx prisma migrate deploy
-npm run typecheck
+npm ci
+npm run typecheck       # next typegen && tsc --noEmit (no prior production build)
 npm run lint
-npm run test            # unit + integration + security (Vitest)
-npm run test:unit
-npm run test:integration
-npm run test:security
-npm run test:audit      # npm audit --audit-level=high (may fail on upstream advisories)
+npm test                # Vitest: unit + integration + security; uses prisma/test.db
 npm run build
+npm run test:audit-policy
+npm run test:e2e        # Playwright starts and stops Next on :4127
 ```
 
 Playwright E2E is **not** part of the default GitHub Actions workflow.

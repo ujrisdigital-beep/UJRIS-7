@@ -5,7 +5,7 @@
 > and what's next. Update it as part of every ticket — a ticket is not
 > done until this file reflects reality.
 
-Last updated: 2026-09-09 (ticket: Step 2A security stabilisation + test foundation — see Ticket Log).
+Last updated: 2026-09-09 (ticket: Step 2A remediation after independent FAIL — see Ticket Log).
 
 ## 1. What UJRIS is
 
@@ -160,6 +160,22 @@ should all pass cleanly before any ticket is considered done — see Ticket
 Log for the last verified run of each.
 
 ## 7. Ticket log
+
+### 2026-09-09 — Step 2A remediation (independent review was FAIL)
+
+Failed head: `fd78b1e059d9216e03f237145625eacac009a870`.  
+Branch: `step-2a-security-test-foundation` — **not merged**. Step 2B **not started**.  
+Independent review verdict remains **FAIL** until a new review of the
+remediation head.
+
+Addressed: strict civil dates (no rollover / no auto-confirm), urgency
+preserved after acknowledgement, clean-checkout `next typegen`, route-level
+security tests, `ForensicFinding` provenance/versioning, bounded hashed
+rate-limiter, uniform auth messages (registration success-vs-fail residual
+documented), dependency policy instead of a bare failing audit job.
+
+See `docs/implementation/STEP2A_REMEDIATION_REPORT.md` and
+`docs/audits/*`.
 
 ### 2026-09-09 — Step 2A: security stabilisation + automated test foundation
 
