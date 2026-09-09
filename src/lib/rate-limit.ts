@@ -1,43 +1,140 @@
 /**
  * Interim in-memory rate limiter for authentication endpoints.
  *
- * Storage strategy: process-local `Map`. Keys are opaque bucket strings
- * (e.g. `login:<normalized-email>`). Values are `{ count, resetAt }`.
+ * Storage: process-local Map. Keys are `action:` + SHA-256 prefix of the
+ * normalised email — never the raw email, password, token, or file bytes.
  *
- * Limitations (not production-grade, not distributed):
- * - Does not work across multiple Node processes / serverless instances.
- * - State is lost on restart.
- * - An attacker can rotate IPs; we key primarily by email so stuffing a
- *   single account is still bounded on one instance.
+ * Bounds:
+ * - Inactive buckets expire after AUTH_RATE_WINDOW_MS.
+ * - Periodic cleanup (unref'd so it does not keep the process alive).
+ * - AUTH_RATE_MAX_BUCKETS cap with deterministic eviction:
+ *   expired first, then least-recently-used buckets that are *not*
+ *   currently limited. Currently-limited buckets are not evicted to
+ *   create room for a new key (prevents a simple overflow bypass).
  *
- * Fail-safe: unexpected exceptions inside the limiter allow the request
- * (fail-open) and are the reason this must be replaced with a shared store
- * (e.g. Supabase / Redis / WAF) during production migration. The limiter
- * itself is still enforced on the happy path.
- *
- * This is not a substitute for Supabase Auth / MFA / WAF.
+ * Not production-grade. Not distributed. Replace before multi-instance
+ * production (Supabase / Redis / WAF). Fail-open if the store throws.
  */
+
+import { createHash } from "node:crypto";
 
 export const AUTH_RATE_WINDOW_MS = 15 * 60 * 1000;
 export const AUTH_RATE_MAX_ATTEMPTS = 5;
+export function authRateMaxBuckets(): number {
+  const n = Number(process.env.UJRIS_RATE_LIMIT_MAX_BUCKETS);
+  return Number.isFinite(n) && n >= 4 ? n : 4096;
+}
+export const AUTH_RATE_CLEANUP_MS = 1_000;
 
-const GENERIC_AUTH_ERROR = "Incorrect email or password.";
+const GENERIC_AUTH_ERROR = "Unable to sign you in.";
+export const GENERIC_ACCOUNT_ACTION_MESSAGE =
+  "If an account exists for this email, you will receive further instructions.";
+export const GENERIC_REGISTRATION_ERROR = "Unable to create an account with these details.";
 export const RATE_LIMITED_MESSAGE = "Too many attempts. Please try again later.";
 
 interface Bucket {
   count: number;
   resetAt: number;
+  lastAccess: number;
 }
 
 const buckets = new Map<string, Bucket>();
 
+let evictions = 0;
+let expiredRemovals = 0;
+let cleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+function hashIdentity(email: string): string {
+  return createHash("sha256").update(email.trim().toLowerCase()).digest("hex").slice(0, 24);
+}
+
+export function loginRateLimitKey(email: string): string {
+  return `login:${hashIdentity(email)}`;
+}
+
+export function signupRateLimitKey(email: string): string {
+  return `signup:${hashIdentity(email)}`;
+}
+
+export function recoveryRateLimitKey(email: string): string {
+  return `recovery:${hashIdentity(email)}`;
+}
+
+export function verificationRateLimitKey(email: string): string {
+  return `verify:${hashIdentity(email)}`;
+}
+
+export function rateLimitMetrics(): { bucketCount: number; evictions: number; expiredRemovals: number } {
+  return { bucketCount: buckets.size, evictions, expiredRemovals };
+}
+
 export function resetRateLimitStoreForTests(): void {
   buckets.clear();
+  evictions = 0;
+  expiredRemovals = 0;
+}
+
+export function stopRateLimitCleanup(): void {
+  if (cleanupTimer) {
+    clearInterval(cleanupTimer);
+    cleanupTimer = null;
+  }
+}
+
+export function sweepRateLimitBuckets(now = Date.now()): number {
+  let removed = 0;
+  for (const [key, bucket] of buckets) {
+    if (bucket.resetAt <= now) {
+      buckets.delete(key);
+      removed += 1;
+      expiredRemovals += 1;
+    }
+  }
+  return removed;
+}
+
+function isLimited(bucket: Bucket, now: number): boolean {
+  return bucket.resetAt > now && bucket.count >= AUTH_RATE_MAX_ATTEMPTS;
+}
+
+/**
+ * Evict expired, then LRU non-limited. Never evict a currently-limited
+ * bucket to admit a new identity.
+ */
+function evictToAdmitNew(now: number): boolean {
+  sweepRateLimitBuckets(now);
+  if (buckets.size < authRateMaxBuckets()) return true;
+
+  let victim: string | null = null;
+  let victimAccess = Infinity;
+  for (const [key, bucket] of buckets) {
+    if (isLimited(bucket, now)) continue;
+    if (bucket.lastAccess < victimAccess) {
+      victim = key;
+      victimAccess = bucket.lastAccess;
+    }
+  }
+  if (!victim) return false;
+  buckets.delete(victim);
+  evictions += 1;
+  return true;
+}
+
+function ensureCleanupTimer(): void {
+  if (cleanupTimer) return;
+  cleanupTimer = setInterval(() => {
+    sweepRateLimitBuckets();
+  }, AUTH_RATE_CLEANUP_MS);
+  cleanupTimer.unref();
 }
 
 export type RateLimitDecision =
   | { allowed: true; remaining: number }
   | { allowed: false; retryAfterSec: number; message: string };
+
+function deny(retryAfterSec: number): RateLimitDecision {
+  return { allowed: false, retryAfterSec, message: RATE_LIMITED_MESSAGE };
+}
 
 export function inspectAuthRateLimit(key: string, now = Date.now()): RateLimitDecision {
   try {
@@ -46,11 +143,7 @@ export function inspectAuthRateLimit(key: string, now = Date.now()): RateLimitDe
       return { allowed: true, remaining: AUTH_RATE_MAX_ATTEMPTS };
     }
     if (existing.count >= AUTH_RATE_MAX_ATTEMPTS) {
-      return {
-        allowed: false,
-        retryAfterSec: Math.max(1, Math.ceil((existing.resetAt - now) / 1000)),
-        message: RATE_LIMITED_MESSAGE,
-      };
+      return deny(Math.max(1, Math.ceil((existing.resetAt - now) / 1000)));
     }
     return { allowed: true, remaining: AUTH_RATE_MAX_ATTEMPTS - existing.count };
   } catch {
@@ -58,34 +151,35 @@ export function inspectAuthRateLimit(key: string, now = Date.now()): RateLimitDe
   }
 }
 
-/** Consume one attempt. Call after the request is well-formed, whether or not the account exists. */
 export function consumeAuthRateLimit(key: string, now = Date.now()): RateLimitDecision {
   try {
+    ensureCleanupTimer();
     const existing = buckets.get(key);
+    if (existing && existing.resetAt > now) {
+      existing.count += 1;
+      existing.lastAccess = now;
+      if (existing.count > AUTH_RATE_MAX_ATTEMPTS) {
+        return deny(Math.max(1, Math.ceil((existing.resetAt - now) / 1000)));
+      }
+      return { allowed: true, remaining: AUTH_RATE_MAX_ATTEMPTS - existing.count };
+    }
+
     if (!existing || existing.resetAt <= now) {
-      buckets.set(key, { count: 1, resetAt: now + AUTH_RATE_WINDOW_MS });
+      if (existing && existing.resetAt <= now) {
+        buckets.delete(key);
+        expiredRemovals += 1;
+      }
+      if (buckets.size >= authRateMaxBuckets() && !evictToAdmitNew(now)) {
+        return deny(60);
+      }
+      buckets.set(key, { count: 1, resetAt: now + AUTH_RATE_WINDOW_MS, lastAccess: now });
       return { allowed: true, remaining: AUTH_RATE_MAX_ATTEMPTS - 1 };
     }
-    existing.count += 1;
-    if (existing.count > AUTH_RATE_MAX_ATTEMPTS) {
-      return {
-        allowed: false,
-        retryAfterSec: Math.max(1, Math.ceil((existing.resetAt - now) / 1000)),
-        message: RATE_LIMITED_MESSAGE,
-      };
-    }
-    return { allowed: true, remaining: AUTH_RATE_MAX_ATTEMPTS - existing.count };
+
+    return { allowed: true, remaining: AUTH_RATE_MAX_ATTEMPTS };
   } catch {
     return { allowed: true, remaining: AUTH_RATE_MAX_ATTEMPTS };
   }
-}
-
-export function loginRateLimitKey(email: string): string {
-  return `login:${email.trim().toLowerCase()}`;
-}
-
-export function signupRateLimitKey(email: string): string {
-  return `signup:${email.trim().toLowerCase()}`;
 }
 
 export { GENERIC_AUTH_ERROR };

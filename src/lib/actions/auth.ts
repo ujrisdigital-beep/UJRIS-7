@@ -14,11 +14,18 @@ import {
   consumeAuthRateLimit,
   loginRateLimitKey,
   signupRateLimitKey,
+  recoveryRateLimitKey,
+  verificationRateLimitKey,
   GENERIC_AUTH_ERROR,
+  GENERIC_REGISTRATION_ERROR,
+  GENERIC_ACCOUNT_ACTION_MESSAGE,
   RATE_LIMITED_MESSAGE,
 } from "@/lib/rate-limit";
 
 const DISPOSABLE_DOMAINS = new Set(["mailinator.com", "tempmail.com", "10minutemail.com", "guerrillamail.com", "yopmail.com"]);
+
+/** Precomputed bcrypt hash so missing-user login does comparable work. Not a real password. */
+const TIMING_HASH = "$2b$10$cVaYQ0XfLiF9NCzIsYMnGOx9o74aNcEDfo772KgDbI0nso96qQNq6";
 
 const signupSchema = z.object({
   name: z.string().trim().min(2, "Please enter your name").max(120),
@@ -29,6 +36,7 @@ const signupSchema = z.object({
 export interface AuthActionResult {
   ok: boolean;
   error?: string;
+  message?: string;
 }
 
 export async function signupAction(_prev: AuthActionResult | undefined, formData: FormData): Promise<AuthActionResult> {
@@ -49,12 +57,14 @@ export async function signupAction(_prev: AuthActionResult | undefined, formData
 
   const domain = email.split("@")[1];
   if (domain && DISPOSABLE_DOMAINS.has(domain)) {
-    return { ok: false, error: "Please use a permanent email address." };
+    return { ok: false, error: GENERIC_REGISTRATION_ERROR };
   }
 
   const existing = await db.user.findUnique({ where: { email } });
   if (existing) {
-    return { ok: false, error: "An account with that email already exists. Try logging in instead." };
+    await verifyPassword(password, existing.passwordHash);
+    await appendAuditLog({ action: "SIGNUP_REJECTED_GENERIC", detail: "existing_or_unusable" });
+    return { ok: false, error: GENERIC_REGISTRATION_ERROR };
   }
 
   const passwordHash = await hashPassword(password);
@@ -89,20 +99,18 @@ export async function loginAction(_prev: AuthActionResult | undefined, formData:
   }
   const { email, password } = parsed.data;
 
-  // Consume before looking up the user so rate-limit behaviour cannot be used
-  // to distinguish existing vs missing accounts.
   const rate = consumeAuthRateLimit(loginRateLimitKey(email));
   if (!rate.allowed) {
     return { ok: false, error: RATE_LIMITED_MESSAGE };
   }
 
   const user = await db.user.findUnique({ where: { email } });
-  if (!user) {
-    return { ok: false, error: GENERIC_AUTH_ERROR };
-  }
-  const valid = await verifyPassword(password, user.passwordHash);
-  if (!valid) {
-    await appendAuditLog({ userId: user.id, action: "LOGIN_FAILED", detail: `email=${email}` });
+  const hash = user?.passwordHash ?? TIMING_HASH;
+  const valid = await verifyPassword(password, hash);
+  if (!user || !valid) {
+    if (user) {
+      await appendAuditLog({ userId: user.id, action: "LOGIN_FAILED", detail: "credentials" });
+    }
     return { ok: false, error: GENERIC_AUTH_ERROR };
   }
 
@@ -116,4 +124,53 @@ export async function loginAction(_prev: AuthActionResult | undefined, formData:
 export async function logoutAction(): Promise<void> {
   await revokeCurrentSessionAndClearCookie();
   redirect("/");
+}
+
+const emailOnlySchema = z.object({
+  email: z.string().trim().toLowerCase().email("Enter a valid email address"),
+});
+
+/** Always the same external message. No mailer is configured in Step 2A. */
+export async function requestPasswordResetAction(
+  _prev: AuthActionResult | undefined,
+  formData: FormData
+): Promise<AuthActionResult> {
+  const parsed = emailOnlySchema.safeParse({ email: formData.get("email") });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid details" };
+  }
+  const rate = consumeAuthRateLimit(recoveryRateLimitKey(parsed.data.email));
+  if (!rate.allowed) {
+    return { ok: false, error: RATE_LIMITED_MESSAGE };
+  }
+  const user = await db.user.findUnique({ where: { email: parsed.data.email } });
+  await verifyPassword("timing", user?.passwordHash ?? TIMING_HASH);
+  await appendAuditLog({
+    userId: user?.id ?? null,
+    action: "PASSWORD_RESET_REQUESTED",
+    detail: "generic_response",
+  });
+  return { ok: true, message: GENERIC_ACCOUNT_ACTION_MESSAGE };
+}
+
+export async function resendVerificationAction(
+  _prev: AuthActionResult | undefined,
+  formData: FormData
+): Promise<AuthActionResult> {
+  const parsed = emailOnlySchema.safeParse({ email: formData.get("email") });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid details" };
+  }
+  const rate = consumeAuthRateLimit(verificationRateLimitKey(parsed.data.email));
+  if (!rate.allowed) {
+    return { ok: false, error: RATE_LIMITED_MESSAGE };
+  }
+  const user = await db.user.findUnique({ where: { email: parsed.data.email } });
+  await verifyPassword("timing", user?.passwordHash ?? TIMING_HASH);
+  await appendAuditLog({
+    userId: user?.id ?? null,
+    action: "VERIFICATION_RESEND_REQUESTED",
+    detail: "generic_response",
+  });
+  return { ok: true, message: GENERIC_ACCOUNT_ACTION_MESSAGE };
 }
