@@ -8,8 +8,8 @@ import { getCurrentUser } from "@/lib/auth";
 import { generateCaseAnalysis } from "@/lib/ai/gateway";
 import { entitlementsFor } from "@/lib/plans";
 import { appendAuditLog } from "@/lib/audit";
-import { estimateReadinessScore, analyzeNarrative, detectIssues } from "@/lib/ai/heuristics";
-import { urgencyFromDays, daysUntil } from "@/lib/legal/deadlines";
+import { analyzeNarrative, detectIssues } from "@/lib/ai/heuristics";
+import { refreshCaseIntelligenceForOwner } from "@/lib/cases/refresh-intelligence";
 
 export interface CaseActionResult {
   ok: boolean;
@@ -175,29 +175,12 @@ export async function acknowledgeDeadlineAction(deadlineId: string): Promise<voi
   revalidatePath(`/cases/${deadline.caseId}`);
 }
 
-/** Recomputes readiness/urgency after evidence or facts change. Called by evidence/document actions. */
+/** Recomputes readiness/urgency. Requires an authenticated owner — do not call without a session. */
 export async function refreshCaseIntelligence(caseId: string): Promise<void> {
-  const kase = await db.case.findUnique({
-    where: { id: caseId },
-    include: { evidence: true, events: true, issues: true, people: true, deadlines: true },
-  });
-  if (!kase) return;
-
-  const nextDeadline = kase.deadlines
-    .filter((d) => !d.acknowledged)
-    .sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime())[0];
-
-  const urgency = nextDeadline ? urgencyFromDays(daysUntil(nextDeadline.dueDate)) : "standard";
-
-  const readiness = estimateReadinessScore({
-    evidenceCount: kase.evidence.length,
-    hasTimeline: kase.events.length > 0,
-    hasDeadlineIdentified: kase.deadlines.length > 0,
-    issueCount: kase.issues.length,
-    peopleIdentified: kase.people.length,
-  });
-
-  await db.case.update({ where: { id: caseId }, data: { readiness, urgency } });
+  const user = await getCurrentUser();
+  if (!user) return;
+  const result = await refreshCaseIntelligenceForOwner(user.id, caseId);
+  if (!result.ok) return;
   revalidatePath(`/cases/${caseId}`);
   revalidatePath("/home");
 }
