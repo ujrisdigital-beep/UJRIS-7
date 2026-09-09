@@ -1,9 +1,9 @@
 # Forensic Document Inspector — design only (Step 2A)
 
-Status: **design only**. Not implemented in this ticket. No tables below are
-created in Prisma/SQLite yet. This document is the contract for the future
-inspector so Step 2B+ can migrate evidence first, then add structured
-findings without inventing schema under pressure.
+Status: **design remains the long-term contract**. Step 2A remediation added
+an additive SQLite `ForensicFinding` table for timestamp-rule provenance
+and versioning only. The full inspector (reports, observations, tool runs,
+relationships) is still not implemented. Step 2B / Supabase was not started.
 
 The inspector observes **metadata and byte-level facts**. It does not decide
 authenticity, legal liability, or intent.

@@ -7,6 +7,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { entitlementsFor } from "@/lib/plans";
 import { appendAuditLog } from "@/lib/audit";
 import { persistEvidenceWithCustody } from "@/lib/evidence-persist";
+import { persistTimestampFinding } from "@/lib/forensics/findings";
 import { GENESIS_HASH, computeChainHash } from "@/lib/hash-chain";
 import { analyzeEvidenceFile, evidenceStrengthScore } from "@/lib/forensics/evidence";
 import { relativeEvidencePath, saveEvidenceFile, MAX_UPLOAD_BYTES, ALLOWED_MIME_TYPES } from "@/lib/storage";
@@ -94,6 +95,15 @@ export async function uploadEvidenceAction(
   } catch {
     return { ok: false, error: "Could not save this evidence. Please try again." };
   }
+
+  await persistTimestampFinding({
+    evidenceId,
+    sha256: forensics.sha256,
+    createdRaw: (forensics.metadata.readableCreateDate ?? forensics.metadata.creationDate) as unknown,
+    modifiedRaw: (forensics.metadata.readableModifyDate ?? forensics.metadata.modificationDate) as unknown,
+    createdBy: user.id,
+    revisionReason: "initial",
+  });
 
   const reviewFlags = forensics.flags.filter((f) => f.severity === "review");
   if (reviewFlags.length > 0) {
