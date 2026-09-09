@@ -177,9 +177,11 @@ static public assets (logos), not user data.
   `/icon.png`, `/apple-icon.png`, `/opengraph-image.jpg`,
   `/brand/ujris-emblem.jpg`, `/brand/ujris-lockup.jpg`, `/api/health` all
   return `200`.
-- Visual verification via a computer-use check of the landing page,
-  `/login`, and `/signup` for correct, non-broken rendering of the brand
-  marks and favicon — see the session's final report for the outcome.
+- Visual verification via an independent computer-use check of the landing
+  page (header, hero, footer), `/login`, and `/signup`: brand marks render
+  with correct rounded corners, no cropping, no broken/missing images; the
+  browser tab favicon shows the UJRIS emblem rather than a generic icon.
+  Confirmed passing.
 
 **Known limitations:** this ticket did not build the missing pages listed
 in §4 (Known gaps); it did not touch auth, database, or billing logic; it
