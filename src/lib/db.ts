@@ -13,3 +13,8 @@ export const db =
 if (process.env.NODE_ENV !== "production") {
   globalForPrisma.prisma = db;
 }
+
+export async function disconnectDb(): Promise<void> {
+  await db.$disconnect();
+  globalForPrisma.prisma = undefined;
+}

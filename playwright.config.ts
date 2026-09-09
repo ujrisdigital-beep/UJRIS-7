@@ -1,18 +1,16 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * E2E smoke tests. They expect `npm run dev -- -p 4127` (or `npx playwright
- * test` with `webServer` below). They do not exercise authenticated case
- * flows — those belong in later tickets once onboarding pages are stable.
+ * Managed-server E2E. Playwright starts Next on :4127 and stops it when
+ * the run finishes. Do not start or stop the server yourself.
  *
- * CI: `npm run test:e2e` after `npx playwright install --with-deps chromium`.
- * The default GitHub Actions workflow does **not** run Playwright (browser
- * install + long-lived Next server). See `.github/workflows/ci.yml`.
+ *   npx playwright install --with-deps chromium
+ *   npm run test:e2e
  */
 export default defineConfig({
   testDir: "./tests/e2e",
   timeout: 30_000,
-  fullyParallel: true,
+  fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   use: {
@@ -23,9 +21,14 @@ export default defineConfig({
   webServer: process.env.PLAYWRIGHT_SKIP_WEBSERVER
     ? undefined
     : {
-        command: "npx next dev -p 4127",
+        command: "npx prisma migrate deploy && npx next dev -p 4127",
         url: "http://127.0.0.1:4127",
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,
+        env: {
+          ...process.env,
+          DATABASE_URL: "file:./test.db",
+          AUTH_SECRET: process.env.AUTH_SECRET || "test-auth-secret-that-is-long-enough-32ch",
+        },
       },
 });

@@ -39,7 +39,6 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
-next-env.d.ts
 
 /src/generated/prisma
 
@@ -52,6 +51,8 @@ next-env.d.ts
 /test-results/
 /playwright-report/
 /blob-report/
+docs/audits/npm-audit.last.json
+docs/audits/dependency-policy-last.json
 
 # uploaded reference docs used to seed this task (not part of the app)
 /uploads/

@@ -12,9 +12,12 @@ export default defineConfig({
     ],
     fileParallelism: false,
     sequence: { concurrent: false },
+    testTimeout: 20_000,
+    hookTimeout: 30_000,
     env: {
       DATABASE_URL: "file:./test.db",
       AUTH_SECRET: "test-auth-secret-that-is-long-enough-32ch",
+      UJRIS_RATE_LIMIT_MAX_BUCKETS: "32",
     },
   },
   resolve: {

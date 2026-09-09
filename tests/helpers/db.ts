@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 
 export async function resetTestDatabase(): Promise<void> {
+  await db.forensicFinding.deleteMany();
   await db.custodyEvent.deleteMany();
   await db.evidence.deleteMany();
   await db.caseEvent.deleteMany();
