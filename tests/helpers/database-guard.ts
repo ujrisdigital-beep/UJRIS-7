@@ -1,18 +1,16 @@
 /**
  * Guards for disposable test databases. Never run destructive setup against
- * a URL that resembles hosted/production Postgres.
+ * a URL that resembles hosted/production Postgres, or against prisma/dev.db.
  */
-
-const PRODUCTION_URL = /postgres(?:ql)?:\/\//i;
-const HOSTED_HINT = /supabase|neon\.tech|amazonaws\.com|azure|gcp|prisma\+postgres|prod/i;
+import {
+  assertDisposableSqliteUrl,
+  disposablePrismaSqliteUrl,
+  sqliteUrlLooksLikeDevDb,
+  sqliteUrlLooksLikeProduction,
+} from "../../scripts/sqlite-url.mjs";
 
 export function databaseUrlLooksLikeProduction(url: string | undefined): boolean {
-  if (!url) return false;
-  const trimmed = url.trim();
-  if (trimmed.startsWith("file:")) return false;
-  if (PRODUCTION_URL.test(trimmed)) return true;
-  if (HOSTED_HINT.test(trimmed)) return true;
-  return false;
+  return sqliteUrlLooksLikeProduction(url);
 }
 
 export function resolveTestDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string {
@@ -23,10 +21,13 @@ export function resolveTestDatabaseUrl(env: NodeJS.ProcessEnv = process.env): st
     throw new Error("Refusing destructive test DB setup because NODE_ENV=production.");
   }
   const incoming = env.DATABASE_URL;
-  if (databaseUrlLooksLikeProduction(incoming)) {
+  if (sqliteUrlLooksLikeProduction(incoming) || databaseUrlLooksLikeProduction(incoming)) {
     throw new Error(
       "Refusing destructive test DB setup: DATABASE_URL resembles a production/hosted database."
     );
   }
-  return "file:./test.db";
+  if (sqliteUrlLooksLikeDevDb(incoming)) {
+    throw new Error("Refusing destructive test DB setup against prisma/dev.db.");
+  }
+  return assertDisposableSqliteUrl(disposablePrismaSqliteUrl("test.db"), "vitest");
 }

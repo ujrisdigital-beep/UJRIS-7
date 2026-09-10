@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, vi } from "vitest";
 import { disconnectDb } from "@/lib/db";
 import { resetRateLimitStoreForTests, stopRateLimitCleanup } from "@/lib/rate-limit";
-import { resolveTestDatabaseUrl } from "./helpers/database-guard";
 import { migrateDeploy } from "../scripts/prisma-migrate.mjs";
 
 const cookieStore = new Map<string, string>();
@@ -42,15 +41,8 @@ export function getTestCookie(name: string): string | undefined {
   return cookieStore.get(name);
 }
 
-process.env.AUTH_SECRET = process.env.AUTH_SECRET || "test-auth-secret-that-is-long-enough-32ch";
-const testDatabaseUrl = resolveTestDatabaseUrl(process.env);
-process.env.DATABASE_URL = testDatabaseUrl;
-if (process.env.UJRIS_ALLOW_DEV_BILLING === undefined) {
-  process.env.UJRIS_ALLOW_DEV_BILLING = "";
-}
-
 try {
-  migrateDeploy(testDatabaseUrl);
+  migrateDeploy(process.env.DATABASE_URL as string);
 } catch (error) {
   console.error("Test database migration failed. Refusing to run tests against an unprepared database.");
   throw error;

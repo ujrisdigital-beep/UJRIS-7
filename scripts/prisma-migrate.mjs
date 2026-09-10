@@ -1,34 +1,29 @@
 #!/usr/bin/env node
 /**
- * Resolve package bins and run Prisma migrate without npx/PATH fragility.
+ * Resolve Prisma's JS CLI and run migrate deploy with process.execPath.
+ * No npx, no platform shims, no shell.
  */
-import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { resolvePackageBin, spawnNodeEntrySync } from "./command-runner.mjs";
+import { assertDisposableSqliteUrl } from "./sqlite-url.mjs";
 
-const require = createRequire(import.meta.url);
-
-export function resolvePackageBin(pkg, binName) {
-  const pkgJsonPath = require.resolve(`${pkg}/package.json`);
-  const pkgJson = JSON.parse(readFileSync(pkgJsonPath, "utf8"));
-  const binField = pkgJson.bin;
-  const rel = typeof binField === "string" ? binField : binField?.[binName];
-  if (!rel) {
-    throw new Error(`Package ${pkg} has no bin named ${binName}`);
-  }
-  return path.resolve(path.dirname(pkgJsonPath), rel);
-}
+export { resolvePackageBin } from "./command-runner.mjs";
 
 export function migrateDeploy(databaseUrl) {
+  assertDisposableSqliteUrl(databaseUrl, "prisma migrate");
   const prismaBin = resolvePackageBin("prisma", "prisma");
-  const result = spawnSync(process.execPath, [prismaBin, "migrate", "deploy"], {
+  const result = spawnNodeEntrySync(prismaBin, ["migrate", "deploy"], {
     env: { ...process.env, DATABASE_URL: databaseUrl },
     stdio: "pipe",
     encoding: "utf8",
-    windowsHide: true,
   });
+  if (result.error) {
+    throw new Error(`prisma migrate deploy failed to launch: ${result.error.message}`);
+  }
+  if (result.signal) {
+    throw new Error(`prisma migrate deploy terminated by signal ${result.signal}`);
+  }
   if (result.status !== 0) {
     const detail = `${result.stderr || ""}\n${result.stdout || ""}`.trim();
     throw new Error(`prisma migrate deploy failed (${result.status}): ${detail}`);
@@ -40,10 +35,6 @@ const invokedDirectly =
 
 if (invokedDirectly) {
   const url = process.env.DATABASE_URL;
-  if (!url) {
-    console.error("DATABASE_URL is required");
-    process.exit(1);
-  }
   try {
     migrateDeploy(url);
   } catch (error) {
