@@ -24,19 +24,25 @@ jobs:
           cache: npm
       - name: Clean install
         run: npm ci
-      - name: Typecheck (no prior production build)
+      - name: Typecheck (typegen + tsc; no prior build)
         run: npm run typecheck
       - name: Lint
         run: npm run lint
-      - name: Unit, integration, and security tests
-        run: npm test
+      - name: Unit tests
+        run: npm run test:unit
+      - name: Security tests
+        run: npm run test:security
+      - name: Integration tests
+        run: npm run test:integration
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
       - name: E2E with managed server
         run: npm run test:e2e
       - name: Production build
         run: npm run build
-      - name: Dependency policy
+      - name: Surface npm audit (visibility; non-gating)
+        run: npm audit --json > docs/audits/npm-audit.last.json || true
+      - name: Runtime dependency security gate
         run: npm run test:audit-policy
       - name: Upload evidence on failure
         if: failure()

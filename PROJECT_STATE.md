@@ -5,7 +5,7 @@
 > and what's next. Update it as part of every ticket — a ticket is not
 > done until this file reflects reality.
 
-Last updated: 2026-09-09 (ticket: Step 2A remediation after independent FAIL — see Ticket Log).
+Last updated: 2026-09-10 (ticket: Step 2A-R remediation after second Codex FAIL — see Ticket Log).
 
 ## 1. What UJRIS is
 
@@ -62,9 +62,13 @@ full record. Summary:
   [`docs/architecture/FORENSIC_DOCUMENT_INSPECTOR.md`](docs/architecture/FORENSIC_DOCUMENT_INSPECTOR.md)
   (design only).
 - Automated tests: Vitest (unit / integration / security) + Playwright
-  smoke E2E. GitHub Actions runs typecheck, lint, Vitest, production build,
-  and `npm audit` (audit is visibility for High/Critical; it is not
-  auto-ignored). See `docs/security/SECURITY_REGRESSION_MATRIX.md`.
+  smoke E2E. GitHub Actions runs typegen, typecheck, lint, unit, security,
+  integration, Playwright, production build, and a **runtime** dependency
+  gate (`npm run test:audit-policy`). `npm audit` is still written for
+  visibility. The Prisma CLI `deepmerge-ts` High advisory is a dated
+  development-only exception — see
+  `docs/security/DEPENDENCY_EXCEPTION_REGISTER.md`.
+  `docs/security/SECURITY_REGRESSION_MATRIX.md`.
 
 **Target architecture** (Supabase Postgres + Supabase Auth + RLS + Stripe
 as sole entitlement writer + structured forensic findings + FACT/INFERENCE/
@@ -160,6 +164,25 @@ should all pass cleanly before any ticket is considered done — see Ticket
 Log for the last verified run of each.
 
 ## 7. Ticket log
+
+### 2026-09-10 — Step 2A-R (Codex FAIL blockers only)
+
+Branch: `step-2a-security-test-foundation` — **not merged**. Step 2B /
+Supabase **not started**. Forensic worker **not implemented**.
+
+Codex blockers addressed: stricter date parser + event-type allow-list so
+hearing/tribunal-order/grievance cannot become a confirmed limitation start;
+invalid civil dates never roll over; acknowledgement does not reduce urgency;
+clean-checkout `next typegen` + test DB production guard; security tests hit
+real routes/actions; limiter uses lazy TTL + max buckets (no global timer);
+forensic **design** provenance/versioning completed.
+
+See `docs/implementation/STEP2A_R_PLAN.md`,
+`docs/implementation/STEP2A_R_IMPLEMENTATION_REPORT.md`,
+`docs/testing/CLEAN_CHECKOUT_TESTING.md`.
+
+**Requires independent review:** YES — return this branch to Codex. Do not
+merge. Do not start Supabase.
 
 ### 2026-09-09 — Step 2A remediation (independent review was FAIL)
 

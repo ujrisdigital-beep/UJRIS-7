@@ -5,8 +5,10 @@ Base: `7e7f86d` on `main`
 Date: 2026-09-09  
 Supabase: **not started**  
 UI redesign: **none**  
-Status for independent review: **PASS FOR INDEPENDENT REVIEW**  
-Production readiness: **not claimed**
+Status for independent review: **superseded for deadline/test-infra by Step 2A-R**  
+See `docs/implementation/STEP2A_R_IMPLEMENTATION_REPORT.md` for the
+remediation of the Codex FAIL on this branch. Original Step 2A work below
+is preserved. Production readiness: **not claimed**.
 
 ## What was done
 
