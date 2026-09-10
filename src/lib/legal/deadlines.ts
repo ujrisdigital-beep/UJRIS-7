@@ -1,5 +1,6 @@
 import { addDays, addMonths, differenceInCalendarDays, subDays } from "date-fns";
 import { londonCivilUtcDate, now } from "@/lib/clock";
+import { civilFromUtcDate, eraEqaPrimaryDueCivil, utcDateFromCivil } from "@/lib/legal/civil-date";
 
 /**
  * Deterministic UK Employment Tribunal deadline calculators.
@@ -21,10 +22,11 @@ export interface DeadlineResult {
   notes: string;
 }
 
-/** The general primary limitation window: 3 months less one day. */
+/** The general primary limitation window: 3 months less one day (civil). */
 export function calculatePrimaryLimitationDate(effectiveDate: Date): DeadlineResult {
-  const threeMonthsLater = addMonths(effectiveDate, 3);
-  const dueDate = subDays(threeMonthsLater, 1);
+  const source = civilFromUtcDate(effectiveDate);
+  const dueCivil = eraEqaPrimaryDueCivil(source);
+  const dueDate = utcDateFromCivil(dueCivil);
   return {
     label: "Employment Tribunal claim deadline (primary limitation)",
     dueDate,
