@@ -1,5 +1,5 @@
 {
-  "reviewDate": "2026-09-09",
+  "reviewDate": "2026-09-10",
   "exceptions": [
     {
       "id": "GHSA-ggr8-5vv4-36mx",
@@ -13,11 +13,17 @@
         "node_modules/@prisma/config",
         "node_modules/prisma"
       ],
+      "acceptedRange": "<8.0.0",
       "expires": "2026-12-31",
+      "reviewed_at": "2026-09-10",
+      "review_by": "2026-12-31",
+      "owner": "UJRIS engineering — Step 2A security track",
+      "runtime_exposure": "none_in_next_request_path",
+      "remediation": "Upgrade Prisma to a release that pins deepmerge-ts >= 8, or stop using Prisma CLI in production images.",
       "availableFix": "npm audit fix --force (Prisma 6.12.0 downgrade or Prisma 7/8)",
-      "upgradeRisk": "Breaking Prisma major/minor downgrade in a security-stabilisation ticket",
+      "upgradeRisk": "Breaking Prisma major/minor change outside this ticket",
       "decision": "accept_temporary_dev_only",
-      "reason": "Confined to the Prisma CLI config merger (devDependency). Not shipped in the Next.js runtime artifact via @prisma/client."
+      "reason": "Confined to the Prisma CLI config merger (devDependency). Not shipped in the Next.js runtime artifact via @prisma/client. Exception is keyed to GHSA-ggr8-5vv4-36mx only."
     }
   ]
 }

@@ -2,11 +2,12 @@
 /**
  * Classifies npm audit findings against a reviewed exception list.
  * Fails on unreviewed / runtime / expired High or Critical advisories.
+ * Matching requires the registered advisory ID — never package name alone.
  */
 import { execSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-
+import { evaluateExceptionGate } from "./dependency-match.mjs";
 const root = process.cwd();
 const exceptionsPath = path.join(root, "docs/security/dependency-exceptions.json");
 const outDir = path.join(root, "docs/audits");
@@ -47,7 +48,6 @@ for (const [name, vuln] of Object.entries(vulns)) {
     .filter(Boolean);
   const viaNames = via.map((item) => (typeof item === "string" ? item : item?.name)).filter(Boolean);
   const nodes = vuln.nodes ?? [];
-  const isDev = ["deepmerge-ts", "prisma", "@prisma/config"].includes(name);
 
   records.push({
     package: name,
@@ -57,45 +57,16 @@ for (const [name, vuln] of Object.entries(vulns)) {
     nodes,
     range: vuln.range,
     fixAvailable: vuln.fixAvailable,
-    developmentOnlyHeuristic: isDev,
   });
 }
 
 writeFileSync(path.join(outDir, "dependency-policy-last.json"), JSON.stringify({ today, records, policy }, null, 2));
 
-const failures = [];
-for (const record of records) {
-  const match = policy.exceptions.find((ex) => {
-    const id = String(ex.id).toUpperCase();
-    const idOk = record.ghsaIds.includes(id);
-    const aliases = [ex.package, ...(ex.alsoAppliesTo ?? [])];
-    const packageOk = aliases.includes(record.package) || record.viaNames.some((n) => aliases.includes(n));
-    const pathOk = record.nodes.some((n) =>
-      ex.dependencyPaths.some((p) => n.includes(p.split(">").pop() ?? p))
-    );
-    return (idOk || packageOk) && (pathOk || packageOk);
-  });
-
-  if (!match) {
-    failures.push(`Unreviewed ${record.severity} advisory in ${record.package}`);
-    continue;
-  }
-  if (new Date(match.expires) < new Date(today)) {
-    failures.push(`Expired exception ${match.id} for ${record.package}`);
-    continue;
-  }
-  if (match.scope !== "development") {
-    failures.push(`Exception ${match.id} is not development-scoped`);
-    continue;
-  }
-  if (match.severity !== record.severity && record.severity === "critical") {
-    failures.push(`Critical advisory ${record.package} cannot use a lower-severity exception`);
-  }
-}
+const failures = evaluateExceptionGate(records, policy, today);
 
 console.log(`Dependency policy: ${records.length} high/critical package(s) considered, ${failures.length} failure(s).`);
 for (const row of records) {
-  console.log(`- ${row.package} ${row.severity} ghsa=${row.ghsaIds.join(",") || "n/a"}`);
+  console.log(`- ${row.package} ${row.severity} ghsa=${row.ghsaIds.join(",") || "inherited"}`);
 }
 if (failures.length > 0) {
   for (const failure of failures) console.error(failure);
