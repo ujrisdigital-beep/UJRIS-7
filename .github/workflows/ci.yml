@@ -9,10 +9,13 @@ permissions:
 
 jobs:
   quality:
-    name: clean-checkout-validation
-    runs-on: ubuntu-latest
+    name: clean-checkout-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     env:
-      DATABASE_URL: file:./test.db
       AUTH_SECRET: ci-test-auth-secret-not-for-production-use
       NEXT_PUBLIC_APP_URL: http://127.0.0.1:4127
       CI: "true"
@@ -34,30 +37,32 @@ jobs:
         run: npm run test:security
       - name: Integration tests
         run: npm run test:integration
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+      - name: Install Playwright Chromium (Linux)
+        if: runner.os == 'Linux'
+        run: node scripts/playwright-install.mjs --with-deps
+      - name: Install Playwright Chromium (Windows)
+        if: runner.os == 'Windows'
+        run: node scripts/playwright-install.mjs
       - name: E2E with managed server (run 1)
-        timeout-minutes: 15
+        timeout-minutes: 20
         run: npm run test:e2e
       - name: Verify E2E port released after run 1
         run: node scripts/e2e-teardown.mjs
       - name: E2E with managed server (run 2)
-        timeout-minutes: 15
+        timeout-minutes: 20
         run: npm run test:e2e
       - name: Verify E2E port released after run 2
         if: always()
         run: node scripts/e2e-teardown.mjs
       - name: Production build
         run: npm run build
-      - name: Surface npm audit (visibility; non-gating)
-        run: npm audit --json > docs/audits/npm-audit.last.json || true
       - name: Runtime dependency security gate
         run: npm run test:audit-policy
       - name: Upload evidence on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: step2a-ci-evidence
+          name: step2a-ci-evidence-${{ matrix.os }}
           path: |
             docs/audits/npm-audit.last.json
             docs/audits/dependency-policy-last.json
