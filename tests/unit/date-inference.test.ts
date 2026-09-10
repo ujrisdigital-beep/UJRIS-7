@@ -2,76 +2,137 @@ import { describe, expect, it } from "vitest";
 import { extractDates } from "@/lib/ai/heuristics";
 import { inferLimitationStart } from "@/lib/legal/date-inference";
 import { calculatePrimaryLimitationDate, higherUrgency, urgencyFromDays, daysUntil } from "@/lib/legal/deadlines";
+import { evaluateLimitationConfirmation } from "@/lib/legal/deadline-confirmation";
 
 describe("limitation start date inference", () => {
-  it("holds a single clear date as provisional, never confirmed", () => {
+  it("hearing date only is not a confirmed limitation start", () => {
+    const dates = extractDates("My Employment Tribunal hearing is listed for 11 April 2026.");
+    const result = inferLimitationStart(dates);
+    expect(result.candidate_dates[0]?.event_type).toBe("hearing");
+    expect(result.status).toBe("insufficient_data");
+    expect(result.selected_date).toBeNull();
+    expect(result.warning_date).toBeNull();
+    expect(result.status).not.toBe("confirmed");
+    expect(result.requires_confirmation).toBe(true);
+  });
+
+  it("grievance date only is not automatically confirmed", () => {
+    const dates = extractDates("I raised a grievance on 11 April 2026.");
+    const result = inferLimitationStart(dates);
+    expect(result.candidate_dates[0]?.event_type).toBe("grievance");
+    expect(result.status).toBe("insufficient_data");
+    expect(result.selected_date).toBeNull();
+    expect(result.status).not.toBe("confirmed");
+  });
+
+  it("tribunal order date is not a claim limitation start", () => {
+    const dates = extractDates("The tribunal order is dated 11 April 2026.");
+    const result = inferLimitationStart(dates);
+    expect(result.candidate_dates[0]?.event_type).toBe("tribunal_order");
+    expect(result.status).toBe("insufficient_data");
+    expect(result.selected_date).toBeNull();
+  });
+
+  it("clear dismissal date is a provisional warning, never confirmed", () => {
     const dates = extractDates("I was dismissed on 11 April 2026.");
     const result = inferLimitationStart(dates);
     expect(result.status).toBe("provisional");
-    expect(result.requiresConfirmation).toBe(true);
-    expect(result.selectedDate).not.toBeNull();
-    expect(result.selectedDate?.getUTCDate()).toBe(11);
-    expect(result.selectedDate?.getUTCMonth()).toBe(3);
+    expect(result.requires_confirmation).toBe(true);
+    expect(result.selected_date).toBeNull();
+    expect(result.warning_date?.getUTCDate()).toBe(11);
+    expect(result.warning_date?.getUTCMonth()).toBe(3);
+    expect(result.candidate_dates[0]?.event_type).toBe("dismissal");
+    expect(result.candidate_dates[0]?.rule_id).toBe("ERA_EQA_3M_LESS_1D");
+    expect(result.status).not.toBe("confirmed");
   });
 
-  it("marks two conflicting candidate dates as ambiguous and selects the earlier as a warning", () => {
+  it("conflicting dismissal and incident dates are ambiguous", () => {
     const dates = extractDates(
-      "On 11 April 2026 I was dismissed. On 20 May 2026 HR sent a further letter."
+      "I was dismissed on 11 April 2026. The discrimination happened on 14 March 2026."
     );
     const result = inferLimitationStart(dates);
     expect(result.status).toBe("ambiguous");
-    expect(result.requiresConfirmation).toBe(true);
-    expect(result.selectedDate?.getUTCMonth()).toBe(3);
-    expect(result.selectedDate?.getUTCDate()).toBe(11);
+    expect(result.requires_confirmation).toBe(true);
+    expect(result.selected_date).toBeNull();
+    expect(result.warning_date?.getUTCMonth()).toBe(2);
+    expect(result.warning_date?.getUTCDate()).toBe(14);
   });
 
-  it("does not treat a later event date as the limitation start when an earlier dismissal date exists", () => {
+  it("is independent of input order", () => {
+    const forward = inferLimitationStart(
+      extractDates("I was dismissed on 11 April 2026. The discrimination happened on 14 March 2026.")
+    );
+    const reverse = inferLimitationStart(
+      extractDates("The discrimination happened on 14 March 2026. I was dismissed on 11 April 2026.")
+    );
+    expect(forward.status).toBe("ambiguous");
+    expect(reverse.status).toBe("ambiguous");
+    expect(forward.warning_date?.toISOString()).toBe(reverse.warning_date?.toISOString());
+    expect(forward.selected_date).toBeNull();
+    expect(reverse.selected_date).toBeNull();
+  });
+
+  it("duplicate candidates on the same calendar day do not create false certainty", () => {
     const dates = extractDates(
-      "I was dismissed on 11 April 2026. On 1 August 2026 they sent a reference."
+      "I was dismissed on 11 April 2026. Dismissal took effect on 11 April 2026."
     );
     const result = inferLimitationStart(dates);
-    expect(result.status).toBe("ambiguous");
-    expect(result.selectedDate?.getUTCMonth()).toBe(3);
-    expect(result.selectedDate?.getUTCDate()).toBe(11);
-    const aprilDue = calculatePrimaryLimitationDate(result.selectedDate as Date).dueDate;
-    const augustDue = calculatePrimaryLimitationDate(new Date(Date.UTC(2026, 7, 1))).dueDate;
-    expect(daysUntil(aprilDue)).toBeLessThan(daysUntil(augustDue));
+    expect(result.status).toBe("provisional");
+    expect(result.status).not.toBe("confirmed");
+    expect(result.selected_date).toBeNull();
   });
 
   it("returns insufficient_data for invalid dates", () => {
     const dates = extractDates("It happened on 32 January 2026 and also 99/99/2026.");
     const result = inferLimitationStart(dates);
-    expect(result.selectedDate).toBeNull();
+    expect(result.selected_date).toBeNull();
     expect(result.status).toBe("insufficient_data");
-    expect(result.requiresConfirmation).toBe(true);
   });
 
-  it("returns insufficient_data when no date is present", () => {
-    const dates = extractDates("They treated me unfairly at work last year.");
-    const result = inferLimitationStart(dates);
-    expect(result.status).toBe("insufficient_data");
-    expect(result.selectedDate).toBeNull();
-  });
-
-  it("is independent of input order", () => {
-    const reverse = extractDates(
-      "On 11 April 2026 I was dismissed. On 14 March 2026 I raised a complaint."
-    );
-    const result = inferLimitationStart(reverse);
-    expect(result.status).toBe("ambiguous");
-    expect(result.selectedDate?.getUTCMonth()).toBe(2);
-    expect(result.selectedDate?.getUTCDate()).toBe(14);
-  });
-
-  it("does not suppress urgency when dates are uncertain but the narrative is urgent", () => {
+  it("does not suppress keyword urgency when dates are uncertain", () => {
     const keywordUrgency = "high" as const;
-    const dates = extractDates("I have a hearing coming up. They dismissed me on 11 April 2026 and wrote again on 20 May 2026.");
+    const dates = extractDates(
+      "I have a hearing coming up. They dismissed me on 11 April 2026 and the discrimination happened on 20 May 2026."
+    );
     const result = inferLimitationStart(dates);
     expect(result.status).toBe("ambiguous");
-    const fromDate = result.selectedDate
-      ? urgencyFromDays(daysUntil(calculatePrimaryLimitationDate(result.selectedDate).dueDate))
+    const fromDate = result.warning_date
+      ? urgencyFromDays(daysUntil(calculatePrimaryLimitationDate(result.warning_date).dueDate))
       : "low";
     const combined = higherUrgency(keywordUrgency, fromDate);
     expect(["high", "critical"]).toContain(combined);
+  });
+
+  it("refuses confirmation when the only date is a hearing", () => {
+    const decision = evaluateLimitationConfirmation({
+      dueDate: new Date(Date.UTC(2026, 6, 10)),
+      ruleId: "ERA_EQA_3M_LESS_1D",
+      sourceEventDate: new Date(Date.UTC(2026, 3, 11)),
+      sourceEventType: "hearing",
+      narrative: "My hearing is on 11 April 2026.",
+    });
+    expect(decision.allowed).toBe(false);
+  });
+
+  it("allows confirmation only for a single allow-listed provisional dismissal", () => {
+    const ok = evaluateLimitationConfirmation({
+      dueDate: new Date(Date.UTC(2026, 6, 10)),
+      ruleId: "ERA_EQA_3M_LESS_1D",
+      sourceEventDate: new Date(Date.UTC(2026, 3, 11)),
+      sourceEventType: "dismissal",
+      narrative: "I was dismissed on 11 April 2026 after raising a complaint about discrimination.",
+    });
+    expect(ok.allowed).toBe(true);
+
+    const ambiguous = evaluateLimitationConfirmation({
+      dueDate: new Date(Date.UTC(2026, 6, 10)),
+      ruleId: "ERA_EQA_3M_LESS_1D",
+      sourceEventDate: new Date(Date.UTC(2026, 3, 11)),
+      sourceEventType: "dismissal",
+      narrative:
+        "I was dismissed on 11 April 2026. The discrimination happened on 14 March 2026.",
+    });
+    expect(ambiguous.allowed).toBe(false);
+    if (!ambiguous.allowed) expect(ambiguous.status).toBe("ambiguous");
   });
 });
