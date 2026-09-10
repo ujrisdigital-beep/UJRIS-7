@@ -16,6 +16,7 @@
     "test:integration": "vitest run tests/integration",
     "test:security": "vitest run tests/security",
     "test:e2e": "node scripts/e2e-run.mjs",
+    "playwright:install": "node scripts/playwright-install.mjs",
     "test:watch": "vitest",
     "test:audit": "npm audit --audit-level=high"
   },

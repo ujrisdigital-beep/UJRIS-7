@@ -10,6 +10,7 @@ import { writeFileSync, unlinkSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { e2eDatabaseUrl } from "./e2e-prepare.mjs";
 
 const require = createRequire(import.meta.url);
 const PORT = String(process.env.E2E_PORT || "4127");
@@ -17,7 +18,7 @@ const PID_FILE = path.join(process.cwd(), ".e2e-webserver.pid");
 
 const env = {
   ...process.env,
-  DATABASE_URL: process.env.DATABASE_URL || "file:./test.db",
+  DATABASE_URL: e2eDatabaseUrl(),
   AUTH_SECRET: process.env.AUTH_SECRET || "test-auth-secret-that-is-long-enough-32ch",
   UJRIS_NEXT_DIST_DIR: process.env.UJRIS_NEXT_DIST_DIR || ".next-e2e",
   NODE_ENV: process.env.NODE_ENV || "production",
@@ -39,6 +40,7 @@ function runNodeCli(binPath, args) {
     stdio: "inherit",
     env,
     windowsHide: true,
+    shell: false,
   });
 }
 

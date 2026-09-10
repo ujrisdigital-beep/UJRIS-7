@@ -41,7 +41,7 @@ export default defineConfig({
           env: {
             ...process.env,
             E2E_PORT: PORT,
-            DATABASE_URL: "file:./e2e.db",
+            DATABASE_URL: process.env.DATABASE_URL ?? "file:./e2e.db",
             AUTH_SECRET: process.env.AUTH_SECRET || "test-auth-secret-that-is-long-enough-32ch",
             UJRIS_NEXT_DIST_DIR: ".next-e2e",
           },

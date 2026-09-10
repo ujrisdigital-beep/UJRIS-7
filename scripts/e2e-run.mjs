@@ -2,34 +2,59 @@
 /**
  * Single owner of the E2E process tree.
  *
- *   npm run test:e2e
- *    └─ node scripts/e2e-run.mjs          ← THE ONLY OWNER
- *         1. disposable file:./e2e.db + migrate
- *         2. next build → .next-e2e (reused if present)
- *         3. spawn next start :4127       ← child of e2e-run
- *         4. spawn playwright test
- *            PLAYWRIGHT_SKIP_WEBSERVER=1  ← Playwright does not start e2e-run
- *         5. reap Next, bind-check 4127, exit with Playwright status
+ * Stages: PREPARE_DB → BUILD → START_SERVER → WAIT_READY → RUN_PLAYWRIGHT
+ *         → TEARDOWN → VERIFY_PORT
  *
- * Playwright is a sibling of Next, both children of this script.
- * There is no script → Playwright → script cycle.
+ * All subprocesses use process.execPath + a resolved JS entry. No shell.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolvePackageBin } from "./prisma-migrate.mjs";
-import { E2E_DATABASE_URL, prepareE2eDatabase } from "./e2e-prepare.mjs";
+import { resolvePackageBin } from "./command-runner.mjs";
+import { prepareE2eDatabase } from "./e2e-prepare.mjs";
 
 const PORT = Number(process.env.E2E_PORT || 4127);
 const HOST = "127.0.0.1";
 const DIST_DIR = process.env.UJRIS_NEXT_DIST_DIR || ".next-e2e";
 
+const STAGES = {
+  PREPARE_DB: "PREPARE_DB",
+  BUILD: "BUILD",
+  START_SERVER: "START_SERVER",
+  WAIT_READY: "WAIT_READY",
+  RUN_PLAYWRIGHT: "RUN_PLAYWRIGHT",
+  TEARDOWN: "TEARDOWN",
+  VERIFY_PORT: "VERIFY_PORT",
+};
+
+function redact(text) {
+  return String(text ?? "")
+    .replace(/postgres(?:ql)?:\/\/[^\s]+/gi, "postgresql://***")
+    .replace(/DATABASE_URL=[^\s]+/gi, "DATABASE_URL=***")
+    .replace(/AUTH_SECRET=[^\s]+/gi, "AUTH_SECRET=***")
+    .replace(/sk_live_[^\s]+/gi, "sk_live_***")
+    .replace(/sk_test_[^\s]+/gi, "sk_test_***")
+    .slice(0, 4000);
+}
+
+function logStage(stage, extra = "") {
+  console.log(`[E2E] STAGE=${stage}${extra ? ` ${extra}` : ""}`);
+}
+
+function failStage(stage, code, stderr) {
+  console.error(`[E2E] STAGE=${stage} FAILED exit=${code ?? "null"}`);
+  const summary = redact(stderr);
+  if (summary.trim()) {
+    console.error(`[E2E] stderr: ${summary}`);
+  }
+}
+
 function childPids(pid) {
   if (!pid || process.platform === "win32") return [];
   try {
-    const out = spawnSync("pgrep", ["-P", String(pid)], { encoding: "utf8" });
+    const out = spawnSync("pgrep", ["-P", String(pid)], { encoding: "utf8", windowsHide: true });
     if (out.status !== 0 || !out.stdout) return [];
     return out.stdout
       .split(/\s+/)
@@ -55,7 +80,7 @@ function unixKillTree(pid, signal) {
 function killProcessTree(pid) {
   if (!pid) return;
   if (process.platform === "win32") {
-    spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true, shell: false });
     return;
   }
   unixKillTree(pid, "SIGTERM");
@@ -64,7 +89,7 @@ function killProcessTree(pid) {
 function forceKillProcessTree(pid) {
   if (!pid) return;
   if (process.platform === "win32") {
-    spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore", windowsHide: true, shell: false });
     return;
   }
   unixKillTree(pid, "SIGKILL");
@@ -109,43 +134,70 @@ async function waitForHttp(url, timeoutMs) {
   throw new Error(`E2E server did not become ready at ${url}: ${lastError}`);
 }
 
-function runNodeCli(binPath, args, env, extra = {}) {
+function spawnNodeCli(binPath, args, env, extra = {}) {
+  const { stdio, ...rest } = extra;
   return spawn(process.execPath, [binPath, ...args], {
-    stdio: "inherit",
-    env,
     windowsHide: true,
-    ...extra,
+    ...rest,
+    stdio: stdio ?? "inherit",
+    env,
+    shell: false,
   });
 }
 
-function waitForExit(child) {
-  return new Promise((resolve) => {
-    if (child.exitCode !== null) {
-      resolve(child.exitCode);
+function waitForChild(child) {
+  return new Promise((resolve, reject) => {
+    if (child.exitCode !== null || child.signalCode) {
+      resolve({ code: child.exitCode, signal: child.signalCode });
       return;
     }
-    child.once("exit", (code) => resolve(code ?? 1));
+    const onError = (error) => {
+      child.removeListener("close", onClose);
+      reject(error);
+    };
+    const onClose = (code, signal) => {
+      child.removeListener("error", onError);
+      resolve({ code, signal });
+    };
+    child.once("error", onError);
+    child.once("close", onClose);
   });
 }
 
 async function reap(child, timeoutMs = 8000) {
-  if (!child.pid || child.exitCode !== null) return;
+  if (!child || !child.pid || child.exitCode !== null) return;
   killProcessTree(child.pid);
   const timer = setTimeout(() => forceKillProcessTree(child.pid), timeoutMs);
-  await waitForExit(child);
-  clearTimeout(timer);
+  try {
+    await waitForChild(child);
+  } catch {
+    forceKillProcessTree(child.pid);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function restoreNextEnv() {
   spawnSync(process.execPath, [path.join(process.cwd(), "scripts", "ensure-next-env.mjs")], {
     stdio: "inherit",
+    windowsHide: true,
+    shell: false,
   });
 }
 
 async function main() {
+  let databaseUrl;
+  logStage(STAGES.PREPARE_DB);
+  try {
+    databaseUrl = prepareE2eDatabase();
+  } catch (error) {
+    failStage(STAGES.PREPARE_DB, 1, error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+
   const env = {
     ...process.env,
-    DATABASE_URL: E2E_DATABASE_URL,
+    DATABASE_URL: databaseUrl,
     AUTH_SECRET: process.env.AUTH_SECRET || "test-auth-secret-that-is-long-enough-32ch",
     UJRIS_NEXT_DIST_DIR: DIST_DIR,
     E2E_PORT: String(PORT),
@@ -154,37 +206,36 @@ async function main() {
     NODE_ENV: process.env.NODE_ENV || "production",
   };
 
-  prepareE2eDatabase();
-
   const nextBin = resolvePackageBin("next", "next");
   const playwrightBin = resolvePackageBin("@playwright/test", "playwright");
 
-  const distExists = existsSync(path.join(process.cwd(), DIST_DIR, "BUILD_ID"));
-  if (!distExists || process.env.E2E_FORCE_BUILD === "1") {
-    const build = runNodeCli(nextBin, ["build"], env);
-    const buildCode = await waitForExit(build);
-    restoreNextEnv();
-    if (buildCode !== 0) {
-      process.exit(buildCode ?? 1);
-    }
-  }
-
-  const next = runNodeCli(nextBin, ["start", "--hostname", HOST, "-p", String(PORT)], env);
+  let next = null;
   let playwright = null;
   let shuttingDown = false;
-  const shutdown = async (code) => {
+  let exitCode = 1;
+
+  const shutdown = async (code, stage = STAGES.TEARDOWN) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    if (playwright) await reap(playwright, 3000);
-    await reap(next);
+    logStage(STAGES.TEARDOWN);
+    try {
+      if (playwright) await reap(playwright, 3000);
+      if (next) await reap(next);
+    } catch (error) {
+      failStage(STAGES.TEARDOWN, 1, error instanceof Error ? error.message : String(error));
+    }
+    logStage(STAGES.VERIFY_PORT);
     try {
       await ensurePortReleased();
     } catch (error) {
-      console.error(`E2E port ${PORT} still in use after shutdown`, error);
+      failStage(STAGES.VERIFY_PORT, 1, error instanceof Error ? error.message : String(error));
       restoreNextEnv();
       process.exit(1);
     }
     restoreNextEnv();
+    if (stage !== STAGES.TEARDOWN && code !== 0) {
+      /* already logged */
+    }
     process.exit(code);
   };
 
@@ -196,17 +247,63 @@ async function main() {
   });
 
   try {
-    await waitForHttp(`http://${HOST}:${PORT}`, 120_000);
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : error);
-    await shutdown(1);
-    return;
-  }
+    const distExists = existsSync(path.join(process.cwd(), DIST_DIR, "BUILD_ID"));
+    if (!distExists || process.env.E2E_FORCE_BUILD === "1") {
+      logStage(STAGES.BUILD);
+      const build = spawnNodeCli(nextBin, ["build"], env);
+      let buildResult;
+      try {
+        buildResult = await waitForChild(build);
+      } catch (error) {
+        failStage(STAGES.BUILD, 1, error instanceof Error ? error.message : String(error));
+        restoreNextEnv();
+        process.exit(1);
+      }
+      restoreNextEnv();
+      if (buildResult.code !== 0) {
+        failStage(STAGES.BUILD, buildResult.code, buildResult.signal ? `signal ${buildResult.signal}` : "");
+        process.exit(buildResult.code ?? 1);
+      }
+    }
 
-  const playwrightChild = runNodeCli(playwrightBin, ["test"], env);
-  playwright = playwrightChild;
-  const status = await waitForExit(playwrightChild);
-  await shutdown(status ?? 1);
+    logStage(STAGES.START_SERVER);
+    next = spawnNodeCli(nextBin, ["start", "--hostname", HOST, "-p", String(PORT)], env);
+    next.once("error", (error) => {
+      failStage(STAGES.START_SERVER, 1, error.message);
+    });
+
+    logStage(STAGES.WAIT_READY);
+    try {
+      await waitForHttp(`http://${HOST}:${PORT}`, 120_000);
+    } catch (error) {
+      failStage(STAGES.WAIT_READY, 1, error instanceof Error ? error.message : String(error));
+      await shutdown(1, STAGES.WAIT_READY);
+      return;
+    }
+
+    logStage(STAGES.RUN_PLAYWRIGHT);
+    playwright = spawnNodeCli(playwrightBin, ["test"], env);
+    let playwrightResult;
+    try {
+      playwrightResult = await waitForChild(playwright);
+    } catch (error) {
+      failStage(STAGES.RUN_PLAYWRIGHT, 1, error instanceof Error ? error.message : String(error));
+      await shutdown(1, STAGES.RUN_PLAYWRIGHT);
+      return;
+    }
+    if (playwrightResult.code !== 0) {
+      failStage(
+        STAGES.RUN_PLAYWRIGHT,
+        playwrightResult.code,
+        playwrightResult.signal ? `signal ${playwrightResult.signal}` : ""
+      );
+    }
+    exitCode = playwrightResult.code ?? 1;
+    await shutdown(exitCode);
+  } catch (error) {
+    failStage("UNCAUGHT", 1, error instanceof Error ? error.message : String(error));
+    await shutdown(1);
+  }
 }
 
 const invokedDirectly =
@@ -214,7 +311,7 @@ const invokedDirectly =
 
 if (invokedDirectly) {
   main().catch((error) => {
-    console.error(error);
+    failStage("UNCAUGHT", 1, error instanceof Error ? error.message : String(error));
     process.exit(1);
   });
 }

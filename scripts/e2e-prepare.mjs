@@ -7,8 +7,13 @@ import { existsSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { migrateDeploy } from "./prisma-migrate.mjs";
+import { assertDisposableSqliteUrl, disposablePrismaSqliteUrl } from "./sqlite-url.mjs";
 
-export const E2E_DATABASE_URL = "file:./e2e.db";
+export function e2eDatabaseUrl(root = process.cwd()) {
+  return assertDisposableSqliteUrl(disposablePrismaSqliteUrl("e2e.db", root), "e2e");
+}
+
+export const E2E_DATABASE_URL = e2eDatabaseUrl();
 
 function removeIfPresent(filePath) {
   if (existsSync(filePath)) {
@@ -17,19 +22,20 @@ function removeIfPresent(filePath) {
 }
 
 export function prepareE2eDatabase(root = process.cwd()) {
-  // Prisma SQLite URLs are resolved relative to prisma/schema.prisma.
+  const url = e2eDatabaseUrl(root);
+  assertDisposableSqliteUrl(url, "e2e");
   removeIfPresent(path.join(root, "e2e.db"));
   removeIfPresent(path.join(root, "e2e.db-journal"));
   removeIfPresent(path.join(root, "prisma", "e2e.db"));
   removeIfPresent(path.join(root, "prisma", "e2e.db-journal"));
-  migrateDeploy(E2E_DATABASE_URL);
-  return E2E_DATABASE_URL;
+  migrateDeploy(url);
+  return url;
 }
 
 const invokedDirectly =
   process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (invokedDirectly) {
-  prepareE2eDatabase();
-  console.log(`E2E database ready at ${E2E_DATABASE_URL}`);
+  const url = prepareE2eDatabase();
+  console.log(`E2E database ready at ${url}`);
 }
