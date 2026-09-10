@@ -5,7 +5,7 @@
  * source, source_type, and confidence. INVALID is never coerced to VALID.
  */
 
-export type ParseStatus = "valid" | "invalid" | "partial" | "ambiguous";
+export type ParseStatus = "valid" | "invalid" | "partial" | "ambiguous" | "missing";
 export type DateSourceType = "iso" | "iso_instant" | "uk_written" | "numeric" | "unknown";
 
 export interface StrictDateParts {

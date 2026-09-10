@@ -1,6 +1,6 @@
 import { addDays } from "date-fns";
 import { monthNameToNumber, parseLegalDate, parseNumericDateToken, parseStrictCivilDate, type ParseStatus } from "@/lib/legal/strict-date";
-import { classifyLegalEventType, type LegalEventType } from "@/lib/legal/event-semantics";
+import { classifyLegalEventType, mayStartLimitationClock, type LegalEventType } from "@/lib/legal/event-semantics";
 import { addLondonCivilDays, londonCivilUtcDate, now } from "@/lib/clock";
 
 /**
@@ -101,7 +101,7 @@ export interface ExtractedDate {
 
 const NARRATIVE_SOURCE_ID = "narrative";
 
-function sentenceAt(text: string, index: number): string {
+function sentenceRange(text: string, index: number): { start: number; end: number } {
   let start = 0;
   for (let i = Math.min(index, text.length - 1); i >= 0; i--) {
     const ch = text[i];
@@ -118,7 +118,16 @@ function sentenceAt(text: string, index: number): string {
       break;
     }
   }
+  return { start, end };
+}
+
+function sentenceAt(text: string, index: number): string {
+  const { start, end } = sentenceRange(text, index);
   return text.slice(start, end).trim();
+}
+
+function spansOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
+  return aStart < bEnd && bStart < aEnd;
 }
 
 function extracted(
@@ -132,9 +141,10 @@ function extracted(
     sourceStartOffset: number;
     sourceEndOffset: number;
     sourceId?: string;
+    eventType?: LegalEventType;
   }
 ): ExtractedDate {
-  const eventType = classifyLegalEventType(context);
+  const eventType = extra.eventType ?? classifyLegalEventType(context);
   const parseStatus: ParseStatus = extra.parseStatus
     ?? (extra.ambiguousNumeric ? "ambiguous" : extra.missingYear ? "partial" : date ? "valid" : "invalid");
   return {
@@ -292,6 +302,42 @@ export function extractDates(text: string, reference: Date = now()): ExtractedDa
     );
   }
 
+  const incompleteRelative = /\b(?:later that (?:month|week|year)|some (?:weeks?|days?|time) later|after that)\b/gi;
+  incompleteRelative.lastIndex = 0;
+  while ((match = incompleteRelative.exec(text))) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (results.some((r) => spansOverlap(r.sourceStartOffset, r.sourceEndOffset, start, end))) continue;
+    results.push(
+      extracted(match[0], sentenceAt(text, start), null, {
+        parseStatus: "partial",
+        sourceStartOffset: start,
+        sourceEndOffset: end,
+      })
+    );
+  }
+
+  const monthOnlyPattern = new RegExp(
+    `\\b(?:in\\s+(${MONTHS.join("|")})(?:\\s+(\\d{4}))?|(${MONTHS.join("|")})\\s+(\\d{4}))\\b`,
+    "gi"
+  );
+  monthOnlyPattern.lastIndex = 0;
+  while ((match = monthOnlyPattern.exec(text))) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (results.some((r) => spansOverlap(r.sourceStartOffset, r.sourceEndOffset, start, end))) continue;
+    results.push(
+      extracted(match[0], sentenceAt(text, start), null, {
+        missingYear: !match[2] && !match[4],
+        parseStatus: "partial",
+        sourceStartOffset: start,
+        sourceEndOffset: end,
+      })
+    );
+  }
+
+  appendMissingQualifyingMentions(text, results);
+
   const seen = new Set<string>();
   return results
     .filter((r) => {
@@ -302,6 +348,72 @@ export function extractDates(text: string, reference: Date = now()): ExtractedDa
     })
     .sort((a, b) => a.sourceStartOffset - b.sourceStartOffset)
     .map((r, occurrenceIndex) => ({ ...r, occurrenceIndex }));
+}
+
+const QUALIFYING_MENTION_PATTERNS: { eventType: "dismissal" | "resignation"; pattern: RegExp }[] = [
+  { eventType: "dismissal", pattern: /\bdismiss(?:ed|al)\b|\bsack(?:ed)?\b|\bfired\b|\bterminated\b|\blet go\b/gi },
+  { eventType: "resignation", pattern: /\bresign(?:ed|ation)\b|\bconstructive dismiss/gi },
+];
+
+function appendMissingQualifyingMentions(text: string, results: ExtractedDate[]): void {
+  const mentions: { start: number; end: number; eventType: "dismissal" | "resignation" }[] = [];
+  for (const { eventType, pattern } of QUALIFYING_MENTION_PATTERNS) {
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text))) {
+      mentions.push({ start: match.index, end: match.index + match[0].length, eventType });
+    }
+  }
+  mentions.sort((a, b) => a.start - b.start || a.end - b.end);
+  const distinct: typeof mentions = [];
+  for (const mention of mentions) {
+    if (distinct.some((prev) => spansOverlap(prev.start, prev.end, mention.start, mention.end))) continue;
+    distinct.push(mention);
+  }
+
+  const seenSentences = new Set<string>();
+  for (const mention of distinct) {
+    const range = sentenceRange(text, mention.start);
+    const sentenceKey = `${range.start}:${range.end}`;
+    if (seenSentences.has(sentenceKey)) continue;
+    seenSentences.add(sentenceKey);
+
+    const datesInSentence = results.filter(
+      (d) => d.sourceStartOffset >= range.start && d.sourceStartOffset < range.end
+    );
+    const mentionsInSentence = distinct.filter((m) => m.start >= range.start && m.start < range.end);
+    const remaining = [...datesInSentence].sort((a, b) => a.sourceStartOffset - b.sourceStartOffset);
+    const assignedMentions = new Set<number>();
+
+    for (const owner of mentionsInSentence) {
+      const following = remaining.filter((d) => d.sourceStartOffset >= owner.start);
+      const pick = following[0] ?? remaining[0];
+      if (!pick) continue;
+      assignedMentions.add(owner.start);
+      remaining.splice(remaining.indexOf(pick), 1);
+      // Same-sentence procedural keywords must not reclassify the date that
+      // belongs to a qualifying mention (dismissal + later hearing).
+      if (pick.eventType !== owner.eventType && !mayStartLimitationClock(pick.eventType)) {
+        pick.eventType = owner.eventType;
+        pick.kind = owner.eventType;
+      }
+    }
+
+    for (const unassigned of mentionsInSentence) {
+      if (assignedMentions.has(unassigned.start)) continue;
+      if (results.some((r) => spansOverlap(r.sourceStartOffset, r.sourceEndOffset, unassigned.start, unassigned.end))) {
+        continue;
+      }
+      results.push(
+        extracted(text.slice(unassigned.start, unassigned.end), sentenceAt(text, unassigned.start), null, {
+          parseStatus: "missing",
+          sourceStartOffset: unassigned.start,
+          sourceEndOffset: unassigned.end,
+          eventType: unassigned.eventType,
+        })
+      );
+    }
+  }
 }
 
 /** Simple heuristic entity extraction: roles mentioned near capitalised names. */
