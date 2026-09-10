@@ -9,6 +9,9 @@ import { resetTestDatabase } from "../helpers/db";
 import { loginAs, seedCase, seedUser } from "../helpers/seed";
 import { issueSession, revokeSession, SESSION_COOKIE } from "@/lib/auth";
 import { setTestCookie } from "../helpers/next-runtime";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import { getEvidenceStorageRoot } from "@/lib/storage";
 
 async function seedEvidence(userId: string, caseId: string, bytes: Buffer, fileName: string, mime: string) {
   const id = crypto.randomUUID();
@@ -109,6 +112,21 @@ describe("evidence file route", () => {
     await loginAs(other);
     const results = await Promise.all([download(id), download(id), download(id)]);
     expect(results.every((r) => r.status === 404)).toBe(true);
+    expect(await db.custodyEvent.count({ where: { evidenceId: id, action: "viewed" } })).toBe(0);
+  });
+
+  it("refuses download when stored bytes no longer match the original SHA-256", async () => {
+    const user = await seedUser();
+    const kase = await seedCase(user.id);
+    const original = Buffer.from("immutable original");
+    const id = await seedEvidence(user.id, kase.id, original, "orig.txt", "text/plain");
+    const evidence = await db.evidence.findUnique({ where: { id } });
+    expect(evidence).not.toBeNull();
+    await writeFile(path.join(getEvidenceStorageRoot(), evidence!.storagePath), Buffer.from("tampered"));
+    await loginAs(user);
+    const res = await download(id);
+    expect(res.status).toBe(409);
+    expect((await db.evidence.findUnique({ where: { id } }))?.sha256).toBe(evidence!.sha256);
     expect(await db.custodyEvent.count({ where: { evidenceId: id, action: "viewed" } })).toBe(0);
   });
 });

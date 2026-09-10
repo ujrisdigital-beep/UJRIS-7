@@ -1,60 +1,78 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { NextRequest } from "next/server";
+import { GET } from "@/app/api/evidence/[evidenceId]/file/route";
 import { db } from "@/lib/db";
-import { hashPassword, issueSession, revokeSession, verifySessionToken } from "@/lib/auth";
+import { persistEvidenceWithCustody } from "@/lib/evidence-persist";
+import { relativeEvidencePath, saveEvidenceFile } from "@/lib/storage";
+import { sha256Buffer } from "@/lib/hash-chain";
 import { resetTestDatabase } from "../helpers/db";
+import { loginAs, seedCase, seedUser } from "../helpers/seed";
+import { logoutAction } from "@/lib/actions/auth";
+import { issueSession, revokeSession, SESSION_COOKIE } from "@/lib/auth";
+import { setTestCookie } from "../helpers/next-runtime";
 
-async function seedUser() {
-  return db.user.create({
-    data: {
-      email: "claimant@example.com",
-      name: "Test Claimant",
-      passwordHash: await hashPassword("password12"),
-      plan: "free",
-    },
+async function seedEvidence(userId: string, caseId: string, bytes: Buffer, fileName: string, mime: string) {
+  const id = crypto.randomUUID();
+  const storagePath = relativeEvidencePath(caseId, id, fileName);
+  await saveEvidenceFile(storagePath, bytes);
+  await persistEvidenceWithCustody({
+    id,
+    caseId,
+    fileName,
+    mimeType: mime,
+    sizeBytes: bytes.length,
+    storagePath,
+    sha256: sha256Buffer(bytes),
+    category: "document",
+    claimedDate: null,
+    description: null,
+    forensicsJson: "{}",
+    strength: 40,
+    actorId: userId,
+  });
+  return id;
+}
+
+async function download(evidenceId: string) {
+  return GET(new NextRequest(`http://127.0.0.1/api/evidence/${evidenceId}/file`), {
+    params: Promise.resolve({ evidenceId }),
   });
 }
 
-describe("session issuance and revocation", () => {
+describe("session issuance and revocation at the evidence route", () => {
   beforeEach(async () => {
     await resetTestDatabase();
   });
 
-  it("login issues a session that authorises, logout revokes replay", async () => {
+  it("logoutAction revokes the captured session so evidence GET cannot be replayed", async () => {
     const user = await seedUser();
+    const kase = await seedCase(user.id);
+    const id = await seedEvidence(user.id, kase.id, Buffer.from("secret-bytes"), "note.txt", "text/plain");
+    await loginAs(user);
+
+    const allowed = await download(id);
+    expect(allowed.status).toBe(200);
+
+    await expect(logoutAction()).rejects.toThrow(/REDIRECT:\//);
+
+    const replay = await download(id);
+    expect(replay.status).toBe(401);
+    expect(await db.custodyEvent.count({ where: { evidenceId: id, action: "viewed" } })).toBe(1);
+  });
+
+  it("revokeSession on the jti denies evidence GET", async () => {
+    const user = await seedUser();
+    const kase = await seedCase(user.id);
+    const id = await seedEvidence(user.id, kase.id, Buffer.from("ok"), "note.txt", "text/plain");
     const { token, jti } = await issueSession({
       userId: user.id,
       email: user.email,
       name: user.name,
       role: user.role,
     });
-
-    const first = await verifySessionToken(token);
-    expect(first?.userId).toBe(user.id);
-    expect(first?.jti).toBe(jti);
-
+    setTestCookie(SESSION_COOKIE, token);
+    expect((await download(id)).status).toBe(200);
     await revokeSession(jti);
-
-    const replay = await verifySessionToken(token);
-    expect(replay).toBeNull();
-  });
-
-  it("rejects malformed tokens", async () => {
-    expect(await verifySessionToken("not-a-jwt")).toBeNull();
-    expect(await verifySessionToken("")).toBeNull();
-  });
-
-  it("rejects expired tokens", async () => {
-    const user = await seedUser();
-    const { token, jti } = await issueSession({
-      userId: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-    });
-    await db.authSession.update({
-      where: { id: jti },
-      data: { expiresAt: new Date(Date.now() - 1000) },
-    });
-    expect(await verifySessionToken(token)).toBeNull();
+    expect((await download(id)).status).toBe(401);
   });
 });

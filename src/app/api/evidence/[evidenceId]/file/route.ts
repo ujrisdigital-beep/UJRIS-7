@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { readEvidenceFile } from "@/lib/storage";
 import { recordCustodyView } from "@/lib/actions/evidence";
 import { buildEvidenceDownloadHeaders } from "@/lib/evidence-delivery";
+import { verifyEvidenceIntegrity } from "@/lib/evidence-integrity";
 
 /**
  * Authenticated, object-level-authorised evidence download.
@@ -26,6 +27,14 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ evi
     buffer = await readEvidenceFile(evidence.storagePath);
   } catch {
     return NextResponse.json({ error: "File missing from storage" }, { status: 404 });
+  }
+
+  const integrity = await verifyEvidenceIntegrity({
+    storagePath: evidence.storagePath,
+    storedSha256: evidence.sha256,
+  });
+  if (integrity.status !== "verified") {
+    return NextResponse.json({ error: "Integrity check failed" }, { status: 409 });
   }
 
   await recordCustodyView(evidenceId);
