@@ -114,6 +114,16 @@ describe("limitation start date inference", () => {
     expect(decision.allowed).toBe(false);
   });
 
+  it("treats a resolved dismissal plus an unresolved qualifying date as ambiguous, never confirmed", () => {
+    const dates = extractDates("I was dismissed on 12 March 2026 and dismissed again later that month.");
+    const result = inferLimitationStart(dates);
+    expect(result.status).toBe("ambiguous");
+    expect(result.selected_date).toBeNull();
+    expect(result.status).not.toBe("confirmed");
+    expect(result.reason).toMatch(/unresolved/i);
+    expect(result.reason).not.toMatch(/high confidence|verified|legal certainty/i);
+  });
+
   it("allows confirmation only for a single allow-listed provisional dismissal", () => {
     const narrative = "I was dismissed on 11 April 2026 after raising a complaint about discrimination.";
     const dates = extractDates(narrative);

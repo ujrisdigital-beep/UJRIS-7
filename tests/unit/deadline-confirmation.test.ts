@@ -5,6 +5,7 @@ import {
   expectedDueDateFromSource,
   fingerprintFromExtracted,
   qualifyingCandidatesFromDates,
+  qualifyingSourceOccurrences,
   sourceEventFingerprint,
   utcCivilKey,
   type StoredDeadlineProvenance,
@@ -293,5 +294,53 @@ describe("deadline confirmation source binding", () => {
       narrative,
     });
     expect(decision.allowed).toBe(false);
+  });
+
+  it("keeps an unresolved qualifying occurrence and refuses confirmation (mutation: resolved-only uniqueness would pass)", () => {
+    const narratives = [
+      "I was dismissed on 12 March 2026 and dismissed again later that month.",
+      "I was dismissed on 12 March 2026 and dismissed again on 31 February 2026.",
+      "I was dismissed on 12 March 2026 and dismissed again in April.",
+      "I was dismissed on 12 March 2026 and later received another dismissal decision.",
+    ];
+    for (const narrative of narratives) {
+      const dates = extractDates(narrative);
+      const resolved = qualifyingCandidatesFromDates(dates);
+      const unresolved = qualifyingSourceOccurrences(dates).filter((o) => !o.resolved);
+      expect(resolved).toHaveLength(1);
+      expect(unresolved.length).toBeGreaterThan(0);
+      expect(unresolved.every((o) => o.sourceEndOffset > o.sourceStartOffset)).toBe(true);
+      const { fingerprint } = dismissalFingerprint(narrative);
+      const decision = confirm({
+        sourceEventDate: mar12,
+        sourceEventType: "dismissal",
+        sourceEventId: fingerprint,
+        sourceRawDate: "12 March 2026",
+        narrative,
+        extractedDates: dates,
+      });
+      expect(decision.allowed).toBe(false);
+      if (!decision.allowed) expect(decision.code).toBe("unresolved_qualifying_source");
+    }
+  });
+
+  it("does not treat an unresolved hearing or grievance as a second limitation source", () => {
+    const hearing = "I was dismissed on 12 March 2026 and later attended a hearing.";
+    const grievance = "I was dismissed on 12 March 2026 and the grievance meeting date is unclear.";
+    for (const narrative of [hearing, grievance]) {
+      const dates = extractDates(narrative);
+      expect(qualifyingCandidatesFromDates(dates)).toHaveLength(1);
+      expect(qualifyingSourceOccurrences(dates).filter((o) => !o.resolved)).toHaveLength(0);
+      const { fingerprint } = dismissalFingerprint(narrative);
+      const decision = confirm({
+        sourceEventDate: mar12,
+        sourceEventType: "dismissal",
+        sourceEventId: fingerprint,
+        sourceRawDate: "12 March 2026",
+        narrative,
+        extractedDates: dates,
+      });
+      expect(decision.allowed).toBe(true);
+    }
   });
 });
