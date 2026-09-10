@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, vi } from "vitest";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { disconnectDb } from "@/lib/db";
 import { resetRateLimitStoreForTests, stopRateLimitCleanup } from "@/lib/rate-limit";
-import { migrateDeploy } from "../scripts/prisma-migrate.mjs";
 
 const cookieStore = new Map<string, string>();
 
@@ -42,7 +43,17 @@ export function getTestCookie(name: string): string | undefined {
 }
 
 try {
-  migrateDeploy(process.env.DATABASE_URL as string);
+  const migrateScript = path.join(process.cwd(), "scripts", "prisma-migrate.mjs");
+  const result = spawnSync(process.execPath, [migrateScript], {
+    env: { ...process.env },
+    encoding: "utf8",
+    windowsHide: true,
+    shell: false,
+  });
+  if (result.error || result.status !== 0) {
+    const detail = `${result.error?.message ?? ""}\n${result.stderr ?? ""}\n${result.stdout ?? ""}`.trim();
+    throw new Error(`prisma migrate deploy failed (${result.status}): ${detail}`);
+  }
 } catch (error) {
   console.error("Test database migration failed. Refusing to run tests against an unprepared database.");
   throw error;

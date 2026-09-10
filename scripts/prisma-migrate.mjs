@@ -8,8 +8,6 @@ import { fileURLToPath } from "node:url";
 import { resolvePackageBin, spawnNodeEntrySync } from "./command-runner.mjs";
 import { assertDisposableSqliteUrl } from "./sqlite-url.mjs";
 
-export { resolvePackageBin } from "./command-runner.mjs";
-
 export function migrateDeploy(databaseUrl) {
   assertDisposableSqliteUrl(databaseUrl, "prisma migrate");
   const prismaBin = resolvePackageBin("prisma", "prisma");

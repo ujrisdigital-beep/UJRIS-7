@@ -17,6 +17,12 @@ export default defineConfig({
     sequence: { concurrent: false },
     testTimeout: 20_000,
     hookTimeout: 30_000,
+    server: {
+      deps: {
+        // Native ESM .mjs must not be Vite-transformed. Windows paths use `\`.
+        external: [/[\\/]scripts[\\/][^\\/]+\.mjs$/],
+      },
+    },
     env: {
       DATABASE_URL: testDatabaseUrl,
       AUTH_SECRET: "test-auth-secret-that-is-long-enough-32ch",
