@@ -5,7 +5,7 @@
 > and what's next. Update it as part of every ticket — a ticket is not
 > done until this file reflects reality.
 
-Last updated: 2026-09-10 (ticket: Step 2A-R remediation after second Codex FAIL — see Ticket Log).
+Last updated: 2026-09-10 (ticket: Step 2A-R2 final gate remediation — see Ticket Log).
 
 ## 1. What UJRIS is
 
@@ -30,6 +30,11 @@ full record. Summary:
   (`src/lib/auth.ts`), now bound to an `AuthSession` row (`jti`) so logout
   can revoke a captured token. **Interim** — **not** Supabase Auth yet.
   In-memory auth rate limiting exists (single-process, not production-grade).
+  Case urgency is **not** the same thing as limitation-clock status:
+  `legalClockStatus` vs `proceduralUrgency` are aggregated from unresolved
+  deadline rows (`clockKind`: `legal_limitation` | `procedural_attention`).
+  Acknowledgement means the user has seen a warning; it does not hide or
+  resolve the date.
 - Authorization: every server action / route handler re-checks
   `record.userId === session.userId` before reading/writing. No RLS yet
   (SQLite has none; Postgres/RLS migration is ADR-0002, not started).
@@ -119,9 +124,9 @@ table by table, never as a single rewrite.
   it needs its own scoped ticket(s) per page.
 - No RLS, no Supabase — see ADR-0002. **Do not start Supabase in a
   follow-on until Step 2A independent review passes.**
-- Playwright E2E is smoke-only (landing + login) and is **not** in the
-  default CI workflow — run `npx playwright install --with-deps chromium`
-  then `npm run test:e2e`.
+- Playwright E2E is smoke-only (landing + login + unauthenticated
+  evidence GET). GitHub Actions **does** run `npm run test:e2e` via a
+  Node supervisor on port 4127, then verifies the port is free.
 - No AI usage/cost observability / grounding validation (Codex finding 10;
   out of scope for Step 2A).
 - Forensic findings are still a JSON blob at runtime; schema is design-only.
@@ -164,6 +169,26 @@ should all pass cleanly before any ticket is considered done — see Ticket
 Log for the last verified run of each.
 
 ## 7. Ticket log
+
+### 2026-09-10 — Step 2A-R2 (Codex 2A-R re-check FAIL — final gate)
+
+Branch: `step-2a-security-test-foundation` — **not merged**. Step 2B /
+Supabase **not started**. Forensic worker **not implemented**.
+
+Codex independently reproduced: confirmation not source-bound; hearing
+tomorrow dropping urgency to STANDARD on refresh; logout test not replaying
+the captured cookie; acknowledged unresolved dates hidden on overview;
+package-name dependency exceptions; Playwright teardown hang.
+
+Remediation: exact provenance confirmation; `legal_limitation` vs
+`procedural_attention`; ack ≠ hide; cookie-replay security test; exact
+`GHSA-ggr8-5vv4-36mx` matching; Node E2E supervisor.
+
+See `docs/implementation/STEP2A_R2_PLAN.md` and
+`docs/implementation/STEP2A_R2_IMPLEMENTATION_REPORT.md`.
+
+**Requires independent review:** YES — return this branch to Codex. Do not
+merge. Do not start Supabase. Do not claim production-ready.
 
 ### 2026-09-10 — Step 2A-R (Codex FAIL blockers only)
 

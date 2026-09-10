@@ -2,26 +2,39 @@
 
 This is the **only** documented exception to failing the runtime/CI
 dependency gate on High/Critical findings. It is not a blanket ignore.
-`npm audit` continues to surface the advisory.
+`npm audit` continues to surface the advisory. Matching is by **advisory
+ID**, not package name.
 
 Reviewed: 2026-09-10  
-Next review: 2026-12-31
+Next review / `review_by`: 2026-12-31  
+Owner: UJRIS engineering — Step 2A security track
 
 ## Exception EX-DEP-001
 
 | Field | Value |
 |---|---|
+| Advisory ID | **GHSA-ggr8-5vv4-36mx** (required match) |
 | Package | `deepmerge-ts` |
+| Also listed by npm | `prisma`, `@prisma/config` (inherited cluster of **this** GHSA only) |
 | Declared version (vulnerable range) | `<8.0.0` |
-| Advisory | [GHSA-ggr8-5vv4-36mx](https://github.com/advisories/GHSA-ggr8-5vv4-36mx) — DeepmergeTS stack exhaustion via crafted `__proto__` keys |
 | Severity | High |
-| Dependency path | `prisma` (devDependency) → `@prisma/config` → `deepmerge-ts` |
-| Also listed by npm | `prisma`, `@prisma/config` (same cluster) |
-| Runtime exposure | **None in the Next.js request path.** `@prisma/client` query runtime does not load `@prisma/config` / `deepmerge-ts`. The vulnerable merger is Prisma **CLI** config loading (`prisma migrate`, `prisma generate`). |
-| Production artifact | Not bundled into the application webpack/turbopack graph for route handlers or server actions. |
-| Why not force-fixed in Step 2A-R | `npm audit fix --force` wants a Prisma 6.12 downgrade or a Prisma 7/8 jump. Either is a breaking ORM change outside this remediation ticket. Codex classified this as **ACCEPTABLE TEMPORARY DEV RISK**. |
-| CI behaviour | `npm run test:audit-policy` **allows this development-scoped exception until 2026-12-31**. Any **other** High/Critical, any **runtime** High/Critical, and any **Critical** on this package **fail** the gate. `npm audit --json` is still written for visibility. |
-| Remediation plan | Dedicated dependency ticket: upgrade Prisma to a 6.x (or later) release that pins `deepmerge-ts >= 8`, or replace Prisma CLI usage. Re-run `npm audit` after the lockfile change. |
-| Do not | Add `audit-level` ignores, `continue-on-error` on unknown High findings, or a blanket `.npmrc audit` suppression. |
+| Scope | development |
+| Dependency paths | `prisma>@prisma/config>deepmerge-ts`; `node_modules/deepmerge-ts`; `node_modules/@prisma/config`; `node_modules/prisma` |
+| Runtime exposure | **None in the Next.js request path.** `@prisma/client` does not load `@prisma/config` / `deepmerge-ts`. |
+| Owner | UJRIS engineering — Step 2A security track |
+| reviewed_at | 2026-09-10 |
+| review_by / expires | 2026-12-31 |
+| Remediation | Upgrade Prisma to a release that pins `deepmerge-ts >= 8`, or stop using Prisma CLI in production images |
+| Decision | accept_temporary_dev_only |
+| Reason | Confined to Prisma CLI config merger (devDependency). Exception is keyed to GHSA-ggr8-5vv4-36mx only. |
+
+A **different** High on `deepmerge-ts`, a Critical on the same package, an
+unexpected runtime path (for example `@prisma/client`), or an expired
+exception **fails** `npm run test:audit-policy`. Never “ignore all Highs
+for package X”.
+
+CI behaviour: the policy test is the gate. Raw `npm audit --audit-level=high`
+is allowed to be nonzero for this documented advisory.
 
 Machine-readable copy: `docs/security/dependency-exceptions.json`.
+Matcher: `scripts/dependency-match.mjs`.
