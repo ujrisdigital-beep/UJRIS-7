@@ -34,6 +34,12 @@ path, or an expired exception **fails** `npm run test:audit-policy`.
 Audit-service errors, malformed JSON, empty/truncated output, and timeouts
 are **ERROR** (exit 2), never a clean PASS.
 
+Launch: `scripts/command-runner.mjs` runs `process.execPath` + `npm_execpath`
+(or `npm-cli.js`). A bare `spawn("npm")` is not used. Spawn ENOENT,
+timeout, signal termination, unexpected exit, and missing/malformed JSON
+are ERROR. npm audit exit 0 or 1 with a valid `vulnerabilities` object is
+**evaluated**.
+
 Exception EX-DEP-001 `acceptedPathClasses`: **`dev_tooling` only**.
 
 CI behaviour: the policy test is the gate. Raw `npm audit --audit-level=high`

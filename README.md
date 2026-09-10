@@ -44,15 +44,16 @@ npm run lint
 npm test                # Vitest: unit + integration + security; uses prisma/test.db
 npm run build
 npm run test:audit-policy
-npm run test:e2e        # Playwright starts and stops Next on :4127
+npm run playwright:install
+npm run test:e2e        # scripts/e2e-run.mjs owns Next on :4127
+node scripts/e2e-teardown.mjs
+npm run test:e2e
+node scripts/e2e-teardown.mjs
 ```
 
-Playwright E2E is **not** part of the default GitHub Actions workflow.
-
-```bash
-npx playwright install --with-deps chromium
-npm run test:e2e        # starts Next on :4127 unless PLAYWRIGHT_SKIP_WEBSERVER=1
-```
+GitHub Actions runs that sequence on `ubuntu-latest` and `windows-latest`.
+Linux CI installs Playwright with `--with-deps`; Windows installs Chromium
+only (`node scripts/playwright-install.mjs`).
 
 ## Checks before every change is considered done
 

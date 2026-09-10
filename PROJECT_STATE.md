@@ -5,7 +5,7 @@
 > and what's next. Update it as part of every ticket — a ticket is not
 > done until this file reflects reality.
 
-Last updated: 2026-09-10 (ticket: Step 2A-R3 final blocker remediation — see Ticket Log).
+Last updated: 2026-09-10 (ticket: Step 2A-R4 cross-platform and deadline identity — see Ticket Log).
 
 ## 1. What UJRIS is
 
@@ -26,6 +26,11 @@ full record. Summary:
   fail typecheck.)
 - Prisma ORM → local SQLite (`prisma/dev.db`, git-ignored). Schema is
   written to be Postgres-portable but Postgres is not wired up yet.
+  Legal civil dates (`sourceEventDate`, limitation `dueDate`) are stored
+  as SQLite `DateTime` but **mean** a timezone-free `YYYY-MM-DD`. Read/write
+  uses UTC Y-M-D only (`2026-03-12T00:00:00.000Z` = civil 12 March 2026).
+  Step 2B PostgreSQL should use `DATE` for those fields. Do not treat a
+  legal date as local midnight.
 - Custom auth: bcrypt + `jose` HS256 JWT in an `httpOnly` cookie
   (`src/lib/auth.ts`), now bound to an `AuthSession` row (`jti`) so logout
   can revoke a captured token. **Interim** — **not** Supabase Auth yet.
@@ -69,23 +74,33 @@ full record. Summary:
 - Automated tests: Vitest (unit / integration / security) + Playwright
   smoke E2E. GitHub Actions runs typegen, typecheck, lint, unit, security,
   integration, Playwright, production build, and a **runtime** dependency
-  gate (`npm run test:audit-policy`). `npm audit` is still written for
-  visibility. The Prisma CLI `deepmerge-ts` High advisory is a dated
-  development-only exception — see
+  gate (`npm run test:audit-policy`) on **ubuntu-latest and windows-latest**.
+  `npm audit` is still written for visibility. The Prisma CLI `deepmerge-ts`
+  High advisory is a dated development-only exception — see
   `docs/security/DEPENDENCY_EXCEPTION_REGISTER.md`.
   `docs/security/SECURITY_REGRESSION_MATRIX.md`.
 
-**Step 2A-R3 invariants (must hold):**
+**Step 2A-R4 invariants (must hold; R3 hearing-urgency still holds):**
 
+- **SOURCE OCCURRENCE:** two distinct source spans are two candidates even
+  when type, date, sentence, and raw phrase match.
+- **SOURCE CONTINUITY:** a same-date replacement must not inherit
+  confirmation provenance. Confirmation matches a `span:` fingerprint.
+- **CIVIL DATE:** legal arithmetic is host-timezone independent
+  (`YYYY-MM-DD` / `{year,month,day}`). ERA_EQA_3M_LESS_1D = add 3 calendar
+  months (month-end clamp) then subtract 1 calendar day.
 - **Confirmation:** stored source still exists, uniquely identifiable by
-  fingerprint (not type+date), type still qualifying, source date unchanged,
-  rule matches, stored due date equals the recomputed UTC civil due date,
-  and no second qualifying limitation-start candidate exists.
+  span fingerprint (not type+date), type still qualifying, source date
+  unchanged, rule matches, stored due date equals the recomputed civil due
+  date, and no second qualifying limitation-start candidate exists.
 - **Procedural urgency:** relative dates resolve against an injectable
   Europe/London clock; a hearing tomorrow persists as procedural attention
   and remains HIGH/CRITICAL across refresh until resolved.
-- **Dependency fail-closed:** advisory + package + path class
-  (`dev_tooling` / `production_runtime` / `unknown`); audit ERROR ≠ PASS.
+- **AUDIT EXECUTION:** failure to execute or parse npm audit is ERROR,
+  never PASS. npm is launched via `process.execPath` + `npm_execpath`.
+- **PORTABILITY:** the same npm scripts run on Windows and Linux; Windows
+  CI is a merge gate. Vitest/E2E own disposable SQLite URLs and refuse
+  hosted/`dev.db` destructive setup.
 - **E2E lifecycle:** `scripts/e2e-run.mjs` is the sole owner; disposable
   `prisma/e2e.db`; two consecutive `npm run test:e2e` exit 0 with port 4127 free.
 
@@ -184,6 +199,34 @@ should all pass cleanly before any ticket is considered done — see Ticket
 Log for the last verified run of each.
 
 ## 7. Ticket log
+
+### 2026-09-10 — Step 2A-R4 (Codex 2A-R3 FAIL — cross-platform & deadline identity)
+
+Branch: `step-2a-security-test-foundation` — **not merged**. Step 2B /
+Supabase **not started**. Forensic worker **not implemented**.
+Hearing-urgency R3 work **not reopened**.
+
+Codex independently reproduced: same-sentence same-day events collapsing
+to one candidate; same-date source replacement still confirming; civil due
+dates differing under `TZ=UTC` vs `TZ=Europe/London`; `spawn npm` ENOENT
+on Windows; abnormal audit execution incompletely classified; Vitest/E2E
+bootstrap not independently reproducible; E2E DB init failing before the
+server starts.
+
+Remediation: span-based occurrence identity; confirmation refuses
+same-date replacement; pure civil-date ERA_EQA_3M_LESS_1D arithmetic;
+portable `process.execPath` command runner; fail-closed audit subprocess
+model; absolute disposable SQLite URLs; staged E2E lifecycle; Windows +
+Linux CI matrix.
+
+SQLite `DateTime` legal dates stay as UTC Y-M-D carriers. PostgreSQL
+`DATE` is documented for Step 2B — no destructive SQLite migration.
+
+See `docs/implementation/STEP2A_R4_PLAN.md` and
+`docs/implementation/STEP2A_R4_IMPLEMENTATION_REPORT.md`.
+
+**Requires independent review:** YES — return this branch to Codex.
+Do not merge. Do not start Supabase. Do not claim production-ready.
 
 ### 2026-09-10 — Step 2A-R3 (Codex 2A-R2 FAIL — final blocker remediation)
 
