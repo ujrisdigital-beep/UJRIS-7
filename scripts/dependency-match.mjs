@@ -38,7 +38,9 @@ export function exceptionMatchesRecord(record, exception) {
     // Every GHSA on this record must be this exception. A second High on
     // the same package must not ride along with GHSA-ggr8-5vv4-36mx.
     advisoryOk = recordGhsas.length === 1 && recordGhsas[0] === exId;
-  } else if ((record.viaNames ?? []).includes(exception.package)) {
+  } else if ((record.viaNames ?? []).some((name) => aliases.includes(name))) {
+    // Inherited parent (prisma → @prisma/config → deepmerge-ts) has no GHSA
+    // on its own row. It may inherit only this registered cluster.
     advisoryOk = true;
   }
 

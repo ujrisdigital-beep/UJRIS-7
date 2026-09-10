@@ -40,6 +40,7 @@ export default defineConfig({
           E2E_PORT: PORT,
           DATABASE_URL: "file:./test.db",
           AUTH_SECRET: process.env.AUTH_SECRET || "test-auth-secret-that-is-long-enough-32ch",
+          UJRIS_NEXT_DIST_DIR: ".next-e2e",
         },
       },
 });

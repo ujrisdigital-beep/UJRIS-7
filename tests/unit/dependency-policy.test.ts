@@ -120,6 +120,20 @@ describe("dependency exception matching", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts an inherited parent whose via name is another package in the same registered cluster", () => {
+    const result = exceptionMatchesRecord(
+      {
+        package: "prisma",
+        severity: "high",
+        ghsaIds: [],
+        viaNames: ["@prisma/config"],
+        nodes: ["node_modules/prisma"],
+      },
+      exception
+    );
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects a second High advisory on the same package even if the known GHSA is also listed", () => {
     const result = exceptionMatchesRecord(
       {

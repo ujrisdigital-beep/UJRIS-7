@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * Portable E2E web server supervisor.
- * Playwright sends SIGTERM/SIGINT to this process; we reap Next and its
- * children (Unix child-walk / Windows taskkill /T) so the port is released.
+ * Builds into `.next-e2e` and runs `next start` so a developer `next dev`
+ * lock cannot block the suite, and so the tracked process is the HTTP
+ * server (not a Turbopack parent that may exit on config rewrite).
  */
 import { spawn, spawnSync } from "node:child_process";
 import { writeFileSync, unlinkSync, readFileSync } from "node:fs";
@@ -18,6 +19,8 @@ const env = {
   ...process.env,
   DATABASE_URL: process.env.DATABASE_URL || "file:./test.db",
   AUTH_SECRET: process.env.AUTH_SECRET || "test-auth-secret-that-is-long-enough-32ch",
+  UJRIS_NEXT_DIST_DIR: process.env.UJRIS_NEXT_DIST_DIR || ".next-e2e",
+  NODE_ENV: process.env.NODE_ENV || "production",
 };
 
 function resolvePackageBin(pkg, binName) {
@@ -83,6 +86,44 @@ export function forceKillProcessTree(pid) {
   unixKillTree(pid, "SIGKILL");
 }
 
+function attachServer(child) {
+  writeFileSync(PID_FILE, String(child.pid ?? ""), "utf8");
+  let shuttingDown = false;
+  const finish = (exitCode = 0) => {
+    try {
+      unlinkSync(PID_FILE);
+    } catch {
+      /* ignore */
+    }
+    process.exit(exitCode);
+  };
+
+  const shutdown = (exitCode = 0) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    killProcessTree(child.pid);
+    const timer = setTimeout(() => {
+      forceKillProcessTree(child.pid);
+      finish(exitCode);
+    }, 5000);
+    if (child.exitCode !== null) {
+      clearTimeout(timer);
+      finish(exitCode);
+      return;
+    }
+    child.once("exit", () => {
+      clearTimeout(timer);
+      finish(exitCode);
+    });
+  };
+
+  process.on("SIGTERM", () => shutdown(0));
+  process.on("SIGINT", () => shutdown(0));
+  child.on("exit", (c) => {
+    if (!shuttingDown) finish(c ?? 0);
+  });
+}
+
 const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (invokedDirectly) {
@@ -93,42 +134,11 @@ if (invokedDirectly) {
   migrate.on("exit", (code) => {
     if (code !== 0) process.exit(code ?? 1);
 
-    const next = runNodeCli(nextBin, ["dev", "--hostname", "127.0.0.1", "-p", PORT]);
-    writeFileSync(PID_FILE, String(next.pid ?? ""), "utf8");
-
-    let shuttingDown = false;
-    const finish = (exitCode = 0) => {
-      try {
-        unlinkSync(PID_FILE);
-      } catch {
-        /* ignore */
-      }
-      process.exit(exitCode);
-    };
-
-    const shutdown = (exitCode = 0) => {
-      if (shuttingDown) return;
-      shuttingDown = true;
-      killProcessTree(next.pid);
-      const timer = setTimeout(() => {
-        forceKillProcessTree(next.pid);
-        finish(exitCode);
-      }, 5000);
-      if (next.exitCode !== null) {
-        clearTimeout(timer);
-        finish(exitCode);
-        return;
-      }
-      next.once("exit", () => {
-        clearTimeout(timer);
-        finish(exitCode);
-      });
-    };
-
-    process.on("SIGTERM", () => shutdown(0));
-    process.on("SIGINT", () => shutdown(0));
-    next.on("exit", (c) => {
-      if (!shuttingDown) finish(c ?? 0);
+    const build = runNodeCli(nextBin, ["build"]);
+    build.on("exit", (buildCode) => {
+      if (buildCode !== 0) process.exit(buildCode ?? 1);
+      const next = runNodeCli(nextBin, ["start", "--hostname", "127.0.0.1", "-p", PORT]);
+      attachServer(next);
     });
   });
 }
