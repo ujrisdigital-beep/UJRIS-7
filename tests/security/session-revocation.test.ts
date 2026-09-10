@@ -8,8 +8,8 @@ import { sha256Buffer } from "@/lib/hash-chain";
 import { resetTestDatabase } from "../helpers/db";
 import { loginAs, seedCase, seedUser } from "../helpers/seed";
 import { logoutAction } from "@/lib/actions/auth";
-import { issueSession, revokeSession, SESSION_COOKIE } from "@/lib/auth";
-import { setTestCookie } from "../helpers/next-runtime";
+import { issueSession, SESSION_COOKIE } from "@/lib/auth";
+import { getTestCookie, setTestCookie } from "../helpers/next-runtime";
 
 async function seedEvidence(userId: string, caseId: string, bytes: Buffer, fileName: string, mime: string) {
   const id = crypto.randomUUID();
@@ -44,35 +44,54 @@ describe("session issuance and revocation at the evidence route", () => {
     await resetTestDatabase();
   });
 
-  it("logoutAction revokes the captured session so evidence GET cannot be replayed", async () => {
+  it("replays the exact captured pre-logout cookie against evidence GET and is denied", async () => {
     const user = await seedUser();
     const kase = await seedCase(user.id);
     const id = await seedEvidence(user.id, kase.id, Buffer.from("secret-bytes"), "note.txt", "text/plain");
-    await loginAs(user);
+    const token = await loginAs(user);
+    const captured = getTestCookie(SESSION_COOKIE);
+    expect(captured).toBe(token);
 
-    const allowed = await download(id);
-    expect(allowed.status).toBe(200);
+    expect((await download(id)).status).toBe(200);
 
     await expect(logoutAction()).rejects.toThrow(/REDIRECT:\//);
+    expect(getTestCookie(SESSION_COOKIE)).toBeUndefined();
 
+    setTestCookie(SESSION_COOKIE, captured as string);
     const replay = await download(id);
     expect(replay.status).toBe(401);
     expect(await db.custodyEvent.count({ where: { evidenceId: id, action: "viewed" } })).toBe(1);
   });
 
-  it("revokeSession on the jti denies evidence GET", async () => {
+  it("logging out session B does not revoke session A", async () => {
     const user = await seedUser();
     const kase = await seedCase(user.id);
     const id = await seedEvidence(user.id, kase.id, Buffer.from("ok"), "note.txt", "text/plain");
-    const { token, jti } = await issueSession({
+
+    const sessionA = await issueSession({
       userId: user.id,
       email: user.email,
       name: user.name,
       role: user.role,
     });
-    setTestCookie(SESSION_COOKIE, token);
+    setTestCookie(SESSION_COOKIE, sessionA.token);
     expect((await download(id)).status).toBe(200);
-    await revokeSession(jti);
+
+    const sessionB = await issueSession({
+      userId: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+    });
+    setTestCookie(SESSION_COOKIE, sessionB.token);
+    expect((await download(id)).status).toBe(200);
+
+    await expect(logoutAction()).rejects.toThrow(/REDIRECT:\//);
+
+    setTestCookie(SESSION_COOKIE, sessionB.token);
     expect((await download(id)).status).toBe(401);
+
+    setTestCookie(SESSION_COOKIE, sessionA.token);
+    expect((await download(id)).status).toBe(200);
   });
 });
