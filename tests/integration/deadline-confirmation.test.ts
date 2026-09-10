@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { resetTestDatabase } from "../helpers/db";
 import { loginAs, seedCase, seedUser } from "../helpers/seed";
 import { confirmDeadlineAction, refreshCaseIntelligence } from "@/lib/actions/cases";
+import { expectedDueDateFromSource } from "@/lib/legal/deadline-confirmation";
 
 describe("explicit deadline confirmation", () => {
   beforeEach(async () => {
@@ -22,16 +23,17 @@ describe("explicit deadline confirmation", () => {
         readiness: 10,
       },
     });
+    const sourceEventDate = new Date(Date.UTC(2026, 3, 11));
     const deadline = await db.deadline.create({
       data: {
         caseId: kase.id,
         label: "Primary limitation",
-        dueDate: addDays(new Date(), 10),
+        dueDate: expectedDueDateFromSource(sourceEventDate),
         basis: "test",
         sourceKind: "derived_deadline",
         ruleId: "ERA_EQA_3M_LESS_1D",
         ruleVersion: "1.0.0",
-        sourceEventDate: new Date(Date.UTC(2026, 3, 11)),
+        sourceEventDate,
         sourceEventType: "dismissal",
         calculationInputs: JSON.stringify({ effectiveDate: "2026-04-11" }),
         confirmationStatus: "unconfirmed",

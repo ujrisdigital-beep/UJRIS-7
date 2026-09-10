@@ -16,8 +16,8 @@ import {
   LIMITATION_INFERENCE_VERSION,
   PROCEDURAL_RULE_ID,
   PROCEDURAL_RULE_VERSION,
-  stableSourceIdentity,
 } from "@/lib/legal/event-semantics";
+import { sourceEventFingerprint, utcCivilKey } from "@/lib/legal/deadline-confirmation";
 import { SITUATION_LABELS } from "@/lib/ai/situations";
 
 /**
@@ -105,6 +105,15 @@ export async function generateCaseAnalysis(input: {
     sourceEventKind: startType,
   });
 
+  const startExtracted = analysis.dates.find(
+    (d) =>
+      d.date &&
+      startType &&
+      warningDate &&
+      d.eventType === startType &&
+      utcCivilKey(d.date) === utcCivilKey(warningDate)
+  ) as (typeof analysis.dates)[number] & { date: Date } | undefined;
+
   const deadlines: CaseAnalysisResult["deadlines"] = [];
   if (derived.ok && derived.dueDate) {
     const warning = dateInference.status === "ambiguous" || dateInference.requiresConfirmation
@@ -123,9 +132,16 @@ export async function generateCaseAnalysis(input: {
       sourceEventType: derived.sourceEventType,
       confirmationStatus: "unconfirmed",
       clockKind: "legal_limitation",
-      sourceEventId: startType && warningDate ? stableSourceIdentity(startType, warningDate) : null,
-      sourceRawDate: dateInference.candidate_dates.find((c) => c.date && c.date.getTime() === warningDate?.getTime())?.raw ?? null,
-      sourceReference: dateInference.candidate_dates.find((c) => c.date && c.date.getTime() === warningDate?.getTime())?.source_id ?? null,
+      sourceEventId: startExtracted
+        ? sourceEventFingerprint({
+            eventType: startExtracted.eventType,
+            sourceDate: startExtracted.date,
+            raw: startExtracted.raw,
+            occurrenceIndex: startExtracted.occurrenceIndex,
+          })
+        : null,
+      sourceRawDate: startExtracted?.raw ?? null,
+      sourceReference: startExtracted?.context.slice(0, 120) ?? null,
       inferenceVersion: LIMITATION_INFERENCE_VERSION,
     });
   }
@@ -134,7 +150,12 @@ export async function generateCaseAnalysis(input: {
   for (const extracted of analysis.dates) {
     if (!extracted.date || extracted.parseStatus !== "valid") continue;
     if (!isProceduralAttentionEvent(extracted.eventType)) continue;
-    const id = stableSourceIdentity(extracted.eventType, extracted.date);
+    const id = sourceEventFingerprint({
+      eventType: extracted.eventType,
+      sourceDate: extracted.date,
+      raw: extracted.raw,
+      occurrenceIndex: extracted.occurrenceIndex,
+    });
     if (seenProcedural.has(id)) continue;
     seenProcedural.add(id);
     deadlines.push({

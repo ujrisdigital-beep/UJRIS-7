@@ -1,17 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { addDays } from "date-fns";
 import { extractDates } from "@/lib/ai/heuristics";
-import { evaluateLimitationConfirmation, type StoredDeadlineProvenance } from "@/lib/legal/deadline-confirmation";
+import {
+  evaluateLimitationConfirmation,
+  expectedDueDateFromSource,
+  sourceEventFingerprint,
+  utcCivilKey,
+  type StoredDeadlineProvenance,
+} from "@/lib/legal/deadline-confirmation";
 import { LIMITATION_INFERENCE_VERSION, LIMITATION_RULE_ID, stableSourceIdentity } from "@/lib/legal/event-semantics";
 
-const due = addDays(new Date(), 10);
 const mar12 = new Date(Date.UTC(2026, 2, 12));
 const mar18 = new Date(Date.UTC(2026, 2, 18));
+const dueFromMar12 = expectedDueDateFromSource(mar12);
 
 function confirm(partial: Partial<StoredDeadlineProvenance> & Pick<StoredDeadlineProvenance, "narrative">) {
   return evaluateLimitationConfirmation({
     clockKind: "legal_limitation",
-    dueDate: due,
+    dueDate: dueFromMar12,
     ruleId: LIMITATION_RULE_ID,
     inferenceVersion: LIMITATION_INFERENCE_VERSION,
     sourceEventDate: null,
@@ -21,15 +26,21 @@ function confirm(partial: Partial<StoredDeadlineProvenance> & Pick<StoredDeadlin
 }
 
 describe("deadline confirmation source binding", () => {
-  it("A: stored dismissal 12 March with matching narrative may confirm", () => {
+  it("A: stored dismissal 12 March with matching narrative and recomputed due date may confirm", () => {
     const narrative = "I was dismissed on 12 March 2026 after raising a complaint about discrimination at work.";
+    const dates = extractDates(narrative);
     const decision = confirm({
       sourceEventDate: mar12,
       sourceEventType: "dismissal",
-      sourceEventId: stableSourceIdentity("dismissal", mar12),
+      sourceEventId: sourceEventFingerprint({
+        eventType: "dismissal",
+        sourceDate: mar12,
+        raw: "12 March 2026",
+        occurrenceIndex: dates.find((d) => d.raw === "12 March 2026")?.occurrenceIndex ?? 0,
+      }),
       sourceRawDate: "12 March 2026",
       narrative,
-      extractedDates: extractDates(narrative),
+      extractedDates: dates,
     });
     expect(decision.allowed).toBe(true);
   });
@@ -72,6 +83,51 @@ describe("deadline confirmation source binding", () => {
     });
     expect(decision.allowed).toBe(false);
     if (!decision.allowed) expect(decision.status).toBe("ambiguous");
+  });
+
+  it("two distinct same-day dismissals are not one unique source", () => {
+    const narrative =
+      "I was dismissed on 12 March 2026 after the morning meeting. They dismissed me on 12 March 2026 after the afternoon meeting.";
+    const dates = extractDates(narrative);
+    const fingerprints = dates
+      .filter((d) => d.date && d.eventType === "dismissal")
+      .map((d) =>
+        sourceEventFingerprint({
+          eventType: d.eventType,
+          sourceDate: d.date!,
+          raw: d.raw,
+          occurrenceIndex: d.occurrenceIndex,
+        })
+      );
+    expect(new Set(fingerprints).size).toBeGreaterThan(1);
+    const decision = confirm({
+      sourceEventDate: mar12,
+      sourceEventType: "dismissal",
+      sourceRawDate: "12 March 2026",
+      narrative,
+      extractedDates: dates,
+    });
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(decision.status).toBe("ambiguous");
+      expect(decision.code).toBe("ambiguous");
+    }
+  });
+
+  it("refuses when the stored due date does not equal the recomputed due date", () => {
+    const narrative = "I was dismissed on 12 March 2026 after raising a complaint about discrimination at work.";
+    const offByOne = new Date(dueFromMar12);
+    offByOne.setUTCDate(offByOne.getUTCDate() + 1);
+    const decision = confirm({
+      dueDate: offByOne,
+      sourceEventDate: mar12,
+      sourceEventType: "dismissal",
+      sourceRawDate: "12 March 2026",
+      narrative,
+    });
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.code).toBe("stored_deadline_mismatch");
+    expect(utcCivilKey(expectedDueDateFromSource(mar12))).toBe(utcCivilKey(dueFromMar12));
   });
 
   it("E: source date removed from the narrative is refused", () => {

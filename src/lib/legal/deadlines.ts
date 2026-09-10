@@ -1,4 +1,5 @@
 import { addDays, addMonths, differenceInCalendarDays, subDays } from "date-fns";
+import { londonCivilUtcDate, now } from "@/lib/clock";
 
 /**
  * Deterministic UK Employment Tribunal deadline calculators.
@@ -75,8 +76,11 @@ export function acasNotificationReminder(effectiveDate: Date): DeadlineResult {
   };
 }
 
+/** Whole Europe/London civil days from the injectable clock to `date`. */
 export function daysUntil(date: Date): number {
-  return differenceInCalendarDays(date, new Date());
+  const target = londonCivilUtcDate(date);
+  const today = londonCivilUtcDate(now());
+  return Math.round((target.getTime() - today.getTime()) / 86_400_000);
 }
 
 export type Urgency = "low" | "standard" | "high" | "critical";
