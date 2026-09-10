@@ -44,6 +44,37 @@ rules):
 A finding may say a timestamp **requires explanation**. It must not say the
 file was forged.
 
+## Version identifiers (required on every report)
+
+These are distinct. Do not collapse them into a single “version” string.
+
+| identifier | what it versions | who bumps it |
+|---|---|---|
+| `forensic_report_version` | This report row’s ordinal for the same evidence/case (1, 2, 3…) | new report after correction/re-run |
+| `schema_version` | Shape of report/observation/finding records | inspector schema owner |
+| `rule_set_version` | The published set of finding rules (e.g. F-TS-001 bundle) | legal/forensic rule owner |
+| `extractor_version` | Parser that pulled raw metadata/text from bytes | extractor module |
+| `tool_version` | External or bundled tool (exifr, pdf-lib, …) | tool vendor / pin file |
+| `processing_pipeline_version` | Orchestration: copy bytes → extract → evaluate → persist | pipeline owner |
+
+A report stores the versions **used for that run**. Changing a rule or
+extractor never mutates a finalized report; it produces a new report.
+
+## Reproducibility principle
+
+Given:
+
+- the same original evidence bytes (immutable `Evidence.sha256`);
+- the same extractor version;
+- the same tool version;
+- the same rule-set version;
+- the same processing pipeline version;
+
+the system must be able to explain **how** a finding was produced
+(which observations, which rule, which comparison). Bit-identical
+re-emission of every timestamp is a goal, not a guarantee, when a tool
+embeds wall-clock `generated_at`. Explanations must still be reconstructable.
+
 ## Future tables
 
 PostgreSQL types are indicative. SQLite equivalents can be used only if a
@@ -51,42 +82,35 @@ local prototype is required; production target is Supabase Postgres (ADR-0002).
 
 ### forensic_reports
 
-One inspection of one evidence item (or a declared set).
+One inspection of one evidence item (or a declared set). **Immutable after
+finalization.** Corrections create a new row with `report_version + 1` and
+`supersedes_report_id` pointing at the previous finalized report. Historical
+rows are never overwritten.
 
 | column | type | notes |
 |---|---|---|
 | id | uuid pk | |
 | case_id | uuid fk → cases | required |
 | evidence_id | uuid fk → evidence | required for single-file reports |
-| status | text | `queued` \| `running` \| `completed` \| `failed` \| `needs_review` |
+| report_version | int | `forensic_report_version` for this evidence (starts at 1) |
+| status | text | `queued` \| `running` \| `completed` \| `failed` \| `needs_review` \| `finalized` |
+| schema_version | text | e.g. `forensic-report/1.0.0` |
+| rule_set_version | text | e.g. `ujris-forensic-rules/2026.09.1` |
+| pipeline_version | text | processing_pipeline_version |
+| extractor_version | text | default extractor for this run |
+| tool_versions | jsonb | map of tool_name → tool_version |
 | summary | text | non-accusatory |
 | limitations | text | what the run could not determine |
-| created_by | uuid fk → profiles/users | inspector service account or user |
-| created_at | timestamptz | |
+| started_at | timestamptz | |
 | completed_at | timestamptz null | |
-
-### forensic_findings
-
-Every finding **must** include the fields below.
-
-| column | type | notes |
-|---|---|---|
-| id | uuid pk | |
-| report_id | uuid fk → forensic_reports | |
-| evidence_id | uuid fk → evidence | |
-| finding_type | text | stable machine id, e.g. `later_revision_appears_present` |
-| category | text | e.g. `timestamp`, `metadata`, `hash`, `relationship` |
-| observed_value | text | what was measured |
-| reference_value | text null | expected/comparison value when applicable |
-| rule_id | text | e.g. `F-TS-001` |
-| severity | text | `info` \| `attention` \| `review` |
-| confidence | text | `low` \| `medium` \| `high` — about the *observation*, not guilt |
-| explanation | text | allowed language only |
-| limitations | text | what this finding does not prove |
-| tool_name | text | |
-| tool_version | text | |
-| raw_observation_reference | uuid fk → forensic_observations | |
+| created_by | uuid / text | user id or `system:` inspector service |
 | created_at | timestamptz | |
+| supersedes_report_id | uuid null | previous report this one replaces |
+| finalized_at | timestamptz null | once set, the row is append-only |
+| payload_hash | text | hash of canonical report body excluding `id` |
+
+Writes after `finalized_at` are forbidden except to set `superseded_by`
+on this row when a newer report is finalized.
 
 ### forensic_observations
 
@@ -99,10 +123,43 @@ legal meaning.
 | report_id | uuid fk → forensic_reports | |
 | evidence_id | uuid fk → evidence | |
 | kind | text | e.g. `exif_datetime_original`, `pdf_mod_date`, `sha256` |
-| value_text | text null | |
+| raw_value | text | exactly what the extractor/tool returned |
+| normalized_value | text null | canonical form (e.g. UTC ISO-8601) |
+| source_location | text | byte range, metadata key, PDF info dict key, … |
+| extractor | text | module id |
+| extractor_version | text | |
+| tool_name | text | |
+| tool_version | text | |
+| extraction_timestamp | timestamptz | when this observation was made |
 | value_numeric | numeric null | |
 | value_instant | timestamptz null | normalized UTC when the observation is a time |
 | raw_json | jsonb | vendor/tool payload |
+| created_at | timestamptz | |
+
+### forensic_findings
+
+Every finding **must** include the fields below. Findings are immutable
+once their parent report is finalized.
+
+| column | type | notes |
+|---|---|---|
+| id | uuid pk | |
+| report_id | uuid fk → forensic_reports | |
+| evidence_id | uuid fk → evidence | |
+| finding_type | text | stable machine id, e.g. `later_revision_appears_present` |
+| category | text | e.g. `timestamp`, `metadata`, `hash`, `relationship` |
+| rule_id | text | e.g. `F-TS-001` |
+| rule_version | text | version of that rule inside the rule set |
+| observation_ids | uuid[] / jsonb | observations this finding rests on |
+| observed_value | text | what was measured |
+| reference_value | text null | expected/comparison value when applicable |
+| severity | text | `info` \| `attention` \| `review` |
+| confidence | text | `low` \| `medium` \| `high` — about the *observation*, not guilt |
+| explanation | text | allowed language only |
+| limitations | text | what this finding does not prove |
+| generated_at | timestamptz | |
+| tool_name | text | |
+| tool_version | text | |
 | created_at | timestamptz | |
 
 ### forensic_tool_runs
@@ -115,6 +172,7 @@ Isolated processing record. Future workers must not mutate evidence bytes.
 | report_id | uuid fk → forensic_reports | |
 | tool_name | text | |
 | tool_version | text | |
+| extractor_version | text null | if this run is an extractor |
 | parameters_json | jsonb | |
 | started_at | timestamptz | |
 | finished_at | timestamptz null | |
@@ -187,9 +245,20 @@ Today `Evidence.forensics` is a JSON blob of flags from
 rule made deterministic in Step 2A. The blob is a transitional store until
 these tables exist.
 
+## Immutability and corrections
+
+1. A report may be mutated only while `status` is `queued` or `running`.
+2. `finalized` / `completed` reports are immutable.
+3. A human or system correction **inserts** a new report (`report_version+1`,
+   `supersedes_report_id = old.id`). It does not `UPDATE` findings in place.
+4. Confirmation of a finding is a separate audit event; it does not rewrite
+   `observed_value`, `rule_version`, or `observation_ids`.
+5. The current Step 2A `ForensicFinding` SQLite table is a **transitional**
+   provenance store for F-TS-001 only. It is not the inspector.
+
 ## Out of scope here
 
-- Implementing the tables or UI.
+- Implementing the tables, worker, or UI (Step 2B / later).
 - Expanding UJU.
 - Declaring files authentic or inauthentic.
 - LLM-based deadline or authenticity arithmetic.
