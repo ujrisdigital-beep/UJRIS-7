@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Single owner of the E2E process tree.
  *

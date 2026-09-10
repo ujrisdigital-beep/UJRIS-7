@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Portable child-process helpers. Never spawn a bare `npm` name.
  * Never set shell:true. Always run JS CLIs with process.execPath.

@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Portable E2E web server supervisor.
  * Builds into `.next-e2e` and runs `next start` so a developer `next dev`

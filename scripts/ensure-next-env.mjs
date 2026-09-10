@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * `next typegen` / `next dev` may rewrite next-env.d.ts to import
  * `.next/dev/types`, which does not exist on a clean checkout.

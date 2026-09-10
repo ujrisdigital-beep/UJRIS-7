@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Create a disposable E2E SQLite database and apply migrations.
  * Never touches prisma/dev.db or a hosted URL.

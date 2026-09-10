@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Install Playwright Chromium using the local package JS CLI.
  * Linux CI may pass --with-deps. Windows does not (Playwright platform constraint).

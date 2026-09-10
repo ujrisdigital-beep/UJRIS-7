@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Classifies npm audit findings against a reviewed exception list.
  *

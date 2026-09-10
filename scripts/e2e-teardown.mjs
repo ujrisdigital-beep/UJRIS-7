@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Verify the E2E port can be rebound. If a leftover supervisor/Next pid is
  * recorded, terminate that process tree first.

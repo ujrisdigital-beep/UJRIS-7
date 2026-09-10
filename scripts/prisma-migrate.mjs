@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Resolve Prisma's JS CLI and run migrate deploy with process.execPath.
  * No npx, no platform shims, no shell.
