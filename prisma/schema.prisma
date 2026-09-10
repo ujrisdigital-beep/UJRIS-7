@@ -186,6 +186,11 @@ model Deadline {
   calculationInputs  String?
   sourceEventDate    DateTime?
   sourceEventType    String    @default("unknown")
+  sourceEventId      String?
+  sourceRawDate      String?
+  sourceReference    String?
+  inferenceVersion   String    @default("limitation-inference/1.0.0")
+  clockKind          String    @default("legal_limitation") // legal_limitation | procedural_attention
   createdAt          DateTime  @default(now())
 
   @@index([caseId])

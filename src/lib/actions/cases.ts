@@ -92,6 +92,11 @@ export async function createCaseAction(
           calculationInputs: d.calculationInputs,
           sourceEventDate: d.sourceEventDate,
           sourceEventType: d.sourceEventType,
+          sourceEventId: d.sourceEventId,
+          sourceRawDate: d.sourceRawDate,
+          sourceReference: d.sourceReference,
+          inferenceVersion: d.inferenceVersion,
+          clockKind: d.clockKind,
           confirmationStatus: d.confirmationStatus,
           resolutionStatus: "unresolved",
         })),
@@ -218,17 +223,17 @@ export async function confirmDeadlineAction(deadlineId: string): Promise<Deadlin
   if (!deadline) return { ok: false, error: "not_found" };
   if (deadline.case.userId !== user.id) return { ok: false, error: "forbidden" };
 
-  const otherUnresolvedSourceDates = deadline.case.deadlines
-    .filter((d) => d.id !== deadline.id && d.resolutionStatus !== "resolved" && d.sourceEventDate)
-    .map((d) => d.sourceEventDate as Date);
-
   const decision = evaluateLimitationConfirmation({
+    clockKind: deadline.clockKind,
     dueDate: deadline.dueDate,
     ruleId: deadline.ruleId,
     sourceEventDate: deadline.sourceEventDate,
     sourceEventType: deadline.sourceEventType,
+    sourceEventId: deadline.sourceEventId,
+    sourceRawDate: deadline.sourceRawDate,
+    sourceReference: deadline.sourceReference,
+    inferenceVersion: deadline.inferenceVersion,
     narrative: deadline.case.narrative,
-    otherUnresolvedSourceDates,
   });
   if (!decision.allowed) {
     return { ok: false, error: "invalid" };

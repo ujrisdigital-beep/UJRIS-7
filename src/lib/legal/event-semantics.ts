@@ -21,6 +21,19 @@ export type LegalEventType =
 
 export const LIMITATION_RULE_ID = "ERA_EQA_3M_LESS_1D";
 export const LIMITATION_RULE_VERSION = "1.0.0";
+export const LIMITATION_INFERENCE_VERSION = "limitation-inference/1.0.0";
+export const PROCEDURAL_RULE_ID = "PROCEDURAL_ATTENTION";
+export const PROCEDURAL_RULE_VERSION = "1.0.0";
+
+export type DeadlineClockKind = "legal_limitation" | "procedural_attention";
+
+/** Dated events that demand attention but must not start the ET limitation clock. */
+export const PROCEDURAL_ATTENTION_EVENT_TYPES: ReadonlySet<LegalEventType> = new Set([
+  "hearing",
+  "tribunal_order",
+  "grievance",
+  "appeal",
+]);
 
 /** Deterministic allow-list for rule ERA_EQA_3M_LESS_1D start date. */
 export const LIMITATION_START_EVENT_TYPES: ReadonlySet<LegalEventType> = new Set([
@@ -62,4 +75,13 @@ export function whyConsideredForLimitation(eventType: LegalEventType): string {
     return `${eventType} is an allow-listed start event for ERA 1996 s.111 / EqA 2010 s.123 (3 months less one day).`;
   }
   return `${eventType} is not an allow-listed limitation-start event for ERA_EQA_3M_LESS_1D.`;
+}
+
+export function isProceduralAttentionEvent(eventType: LegalEventType): boolean {
+  return PROCEDURAL_ATTENTION_EVENT_TYPES.has(eventType);
+}
+
+export function stableSourceIdentity(eventType: string, date: Date): string {
+  const key = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+  return `${eventType}:${key}`;
 }

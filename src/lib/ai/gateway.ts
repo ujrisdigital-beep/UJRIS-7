@@ -11,6 +11,13 @@ import {
 } from "@/lib/legal/deadlines";
 import { inferLimitationStart } from "@/lib/legal/date-inference";
 import { deriveLimitationDeadline } from "@/lib/legal/derived-deadline";
+import {
+  isProceduralAttentionEvent,
+  LIMITATION_INFERENCE_VERSION,
+  PROCEDURAL_RULE_ID,
+  PROCEDURAL_RULE_VERSION,
+  stableSourceIdentity,
+} from "@/lib/legal/event-semantics";
 import { SITUATION_LABELS } from "@/lib/ai/situations";
 
 /**
@@ -55,6 +62,11 @@ export interface CaseAnalysisResult {
     sourceEventDate: Date | null;
     sourceEventType: string;
     confirmationStatus: "unconfirmed";
+    clockKind: "legal_limitation" | "procedural_attention";
+    sourceEventId: string | null;
+    sourceRawDate: string | null;
+    sourceReference: string | null;
+    inferenceVersion: string;
   }[];
   urgency: Urgency;
   dateInference: import("@/lib/legal/date-inference").DateInferenceResult;
@@ -110,11 +122,54 @@ export async function generateCaseAnalysis(input: {
       sourceEventDate: derived.sourceEventDate,
       sourceEventType: derived.sourceEventType,
       confirmationStatus: "unconfirmed",
+      clockKind: "legal_limitation",
+      sourceEventId: startType && warningDate ? stableSourceIdentity(startType, warningDate) : null,
+      sourceRawDate: dateInference.candidate_dates.find((c) => c.date && c.date.getTime() === warningDate?.getTime())?.raw ?? null,
+      sourceReference: dateInference.candidate_dates.find((c) => c.date && c.date.getTime() === warningDate?.getTime())?.source_id ?? null,
+      inferenceVersion: LIMITATION_INFERENCE_VERSION,
+    });
+  }
+
+  const seenProcedural = new Set<string>();
+  for (const extracted of analysis.dates) {
+    if (!extracted.date || extracted.parseStatus !== "valid") continue;
+    if (!isProceduralAttentionEvent(extracted.eventType)) continue;
+    const id = stableSourceIdentity(extracted.eventType, extracted.date);
+    if (seenProcedural.has(id)) continue;
+    seenProcedural.add(id);
+    deadlines.push({
+      label:
+        extracted.eventType === "hearing"
+          ? "Hearing / tribunal listing (procedural — not a limitation start)"
+          : `Procedural date (${extracted.eventType}) — not a limitation start`,
+      dueDate: extracted.date,
+      basis:
+        "This date requires attention. It is not an Employment Tribunal limitation-start date under ERA_EQA_3M_LESS_1D.",
+      confidence: "low",
+      sourceKind: "source_event",
+      ruleId: PROCEDURAL_RULE_ID,
+      ruleVersion: PROCEDURAL_RULE_VERSION,
+      calculationInputs: JSON.stringify({
+        eventType: extracted.eventType,
+        date: extracted.date.toISOString(),
+        clockKind: "procedural_attention",
+      }),
+      sourceEventDate: extracted.date,
+      sourceEventType: extracted.eventType,
+      confirmationStatus: "unconfirmed",
+      clockKind: "procedural_attention",
+      sourceEventId: id,
+      sourceRawDate: extracted.raw,
+      sourceReference: extracted.context.slice(0, 120),
+      inferenceVersion: LIMITATION_INFERENCE_VERSION,
     });
   }
 
   const keywordUrgency: Urgency = analysis.hasUrgencySignal ? "high" : "low";
-  const deadlineUrgency: Urgency = deadlines[0] ? urgencyFromDays(daysUntil(deadlines[0].dueDate)) : "low";
+  const deadlineUrgency: Urgency = deadlines.reduce<Urgency>(
+    (acc, d) => higherUrgency(acc, urgencyFromDays(daysUntil(d.dueDate))),
+    "low"
+  );
   const urgency = higherUrgency(keywordUrgency, deadlineUrgency);
 
   const timelineEvents = analysis.dates

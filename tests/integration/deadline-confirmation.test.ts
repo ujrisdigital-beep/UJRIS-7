@@ -138,4 +138,37 @@ describe("explicit deadline confirmation", () => {
     expect(await confirmDeadlineAction(deadline.id)).toEqual({ ok: false, error: "invalid" });
     expect((await db.deadline.findUnique({ where: { id: deadline.id } }))?.confirmationStatus).toBe("unconfirmed");
   });
+
+  it("refuses to confirm a stored dismissal date that is not the narrative source", async () => {
+    const user = await seedUser();
+    const kase = await db.case.create({
+      data: {
+        userId: user.id,
+        title: "Mismatch",
+        situation: "dismissal",
+        narrative: "I was dismissed on 18 April 2026 after raising a complaint about discrimination at work.",
+        urgency: "low",
+        readiness: 10,
+      },
+    });
+    const deadline = await db.deadline.create({
+      data: {
+        caseId: kase.id,
+        label: "Primary limitation",
+        dueDate: addDays(new Date(), 10),
+        basis: "test",
+        ruleId: "ERA_EQA_3M_LESS_1D",
+        ruleVersion: "1.0.0",
+        sourceEventDate: new Date(Date.UTC(2026, 2, 12)),
+        sourceEventType: "dismissal",
+        sourceRawDate: "12 March 2026",
+        clockKind: "legal_limitation",
+        confirmationStatus: "unconfirmed",
+        resolutionStatus: "unresolved",
+      },
+    });
+    await loginAs(user);
+    expect(await confirmDeadlineAction(deadline.id)).toEqual({ ok: false, error: "invalid" });
+    expect((await db.deadline.findUnique({ where: { id: deadline.id } }))?.confirmationStatus).toBe("unconfirmed");
+  });
 });
