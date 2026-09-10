@@ -84,6 +84,7 @@ export type ExtractedDateKind = LegalEventType;
 export interface ExtractedDate {
   raw: string;
   date: Date | null;
+  civilDate: string | null;
   context: string;
   valid: boolean;
   missingYear: boolean;
@@ -92,19 +93,46 @@ export interface ExtractedDate {
   eventType: LegalEventType;
   parseStatus: ParseStatus;
   provenance: "narrative_extraction";
+  sourceId: string;
+  sourceStartOffset: number;
+  sourceEndOffset: number;
   occurrenceIndex: number;
 }
 
-const MONTHS = [
-  "january", "february", "march", "april", "may", "june",
-  "july", "august", "september", "october", "november", "december",
-];
+const NARRATIVE_SOURCE_ID = "narrative";
+
+function sentenceAt(text: string, index: number): string {
+  let start = 0;
+  for (let i = Math.min(index, text.length - 1); i >= 0; i--) {
+    const ch = text[i];
+    if (ch === "." || ch === "!" || ch === "?" || ch === "\n") {
+      start = i + 1;
+      break;
+    }
+  }
+  let end = text.length;
+  for (let i = index; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "." || ch === "!" || ch === "?" || ch === "\n") {
+      end = i + 1;
+      break;
+    }
+  }
+  return text.slice(start, end).trim();
+}
 
 function extracted(
   raw: string,
   context: string,
   date: Date | null,
-  extra: { missingYear?: boolean; ambiguousNumeric?: boolean; parseStatus?: ParseStatus; occurrenceIndex?: number } = {}
+  extra: {
+    missingYear?: boolean;
+    ambiguousNumeric?: boolean;
+    parseStatus?: ParseStatus;
+    sourceStartOffset: number;
+    sourceEndOffset: number;
+    sourceId?: string;
+  }
 ): ExtractedDate {
   const eventType = classifyLegalEventType(context);
   const parseStatus: ParseStatus = extra.parseStatus
@@ -112,6 +140,7 @@ function extracted(
   return {
     raw,
     date,
+    civilDate: date ? `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}` : null,
     context: context.trim(),
     valid: date !== null && parseStatus === "valid",
     missingYear: extra.missingYear === true,
@@ -120,9 +149,17 @@ function extracted(
     eventType,
     parseStatus,
     provenance: "narrative_extraction",
-    occurrenceIndex: extra.occurrenceIndex ?? 0,
+    sourceId: extra.sourceId ?? NARRATIVE_SOURCE_ID,
+    sourceStartOffset: extra.sourceStartOffset,
+    sourceEndOffset: extra.sourceEndOffset,
+    occurrenceIndex: 0,
   };
 }
+
+const MONTHS = [
+  "january", "february", "march", "april", "may", "june",
+  "july", "august", "september", "october", "november", "december",
+];
 
 const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
@@ -154,10 +191,13 @@ function londonCivilPartsFromInstant(instant: Date) {
   };
 }
 
-/** Extract calendar dates mentioned in free text. Invalid civil dates are not rolled over. Relative words require the injectable clock. */
+function spanKey(d: Pick<ExtractedDate, "sourceId" | "sourceStartOffset" | "sourceEndOffset">): string {
+  return `${d.sourceId}:${d.sourceStartOffset}:${d.sourceEndOffset}`;
+}
+
+/** Extract calendar dates mentioned in free text. Identity is assigned from source spans before any grouping. */
 export function extractDates(text: string, reference: Date = now()): ExtractedDate[] {
   const results: ExtractedDate[] = [];
-  const sentences = text.split(/(?<=[.!?\n])\s+/);
 
   const numericPattern = /\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})\b/g;
   const isoPattern = /\b(\d{4})-(\d{2})-(\d{2})(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?)?\b/g;
@@ -168,75 +208,99 @@ export function extractDates(text: string, reference: Date = now()): ExtractedDa
   const monthFirstPattern = new RegExp(`\\b(${MONTHS.join("|")})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(\\d{4}))?\\b`, "gi");
   const relativePattern = /\b(today|tomorrow|yesterday|in \d+ days?|next (?:sunday|monday|tuesday|wednesday|thursday|friday|saturday))\b/gi;
 
-  for (const sentence of sentences) {
-    let match: RegExpExecArray | null;
+  let match: RegExpExecArray | null;
 
-    isoPattern.lastIndex = 0;
-    while ((match = isoPattern.exec(sentence))) {
-      const parsed = parseLegalDate(match[0], "narrative_iso");
-      results.push(extracted(match[0], sentence, parsed.normalized_value, { parseStatus: parsed.parse_status }));
-    }
+  isoPattern.lastIndex = 0;
+  while ((match = isoPattern.exec(text))) {
+    const parsed = parseLegalDate(match[0], "narrative_iso");
+    const start = match.index;
+    const end = start + match[0].length;
+    results.push(
+      extracted(match[0], sentenceAt(text, start), parsed.normalized_value, {
+        parseStatus: parsed.parse_status,
+        sourceStartOffset: start,
+        sourceEndOffset: end,
+      })
+    );
+  }
 
-    numericPattern.lastIndex = 0;
-    while ((match = numericPattern.exec(sentence))) {
-      const [raw, first, second, y] = match;
-      const year = y.length === 2 ? 2000 + Number(y) : Number(y);
-      const parsed = parseNumericDateToken(Number(first), Number(second), year);
-      if (parsed.parse_status === "ambiguous") {
-        results.push(extracted(raw, sentence, null, { ambiguousNumeric: true, parseStatus: "ambiguous" }));
-      } else {
-        results.push(extracted(raw, sentence, parsed.normalized_value, { parseStatus: parsed.parse_status }));
-      }
+  numericPattern.lastIndex = 0;
+  while ((match = numericPattern.exec(text))) {
+    const [raw, first, second, y] = match;
+    const year = y.length === 2 ? 2000 + Number(y) : Number(y);
+    const parsed = parseNumericDateToken(Number(first), Number(second), year);
+    const start = match.index;
+    const end = start + raw.length;
+    const ctx = sentenceAt(text, start);
+    if (parsed.parse_status === "ambiguous") {
+      results.push(extracted(raw, ctx, null, { ambiguousNumeric: true, parseStatus: "ambiguous", sourceStartOffset: start, sourceEndOffset: end }));
+    } else {
+      results.push(extracted(raw, ctx, parsed.normalized_value, { parseStatus: parsed.parse_status, sourceStartOffset: start, sourceEndOffset: end }));
     }
+  }
 
-    wordPattern.lastIndex = 0;
-    while ((match = wordPattern.exec(sentence))) {
-      const [raw, d, monthName, y] = match;
-      const month = monthNameToNumber(monthName);
-      if (!y) {
-        results.push(extracted(raw, sentence, null, { missingYear: true }));
-        continue;
-      }
-      if (month == null) {
-        results.push(extracted(raw, sentence, null));
-        continue;
-      }
-      const parsed = parseStrictCivilDate(Number(y), month, Number(d));
-      results.push(extracted(raw, sentence, parsed.normalized_value, { parseStatus: parsed.parse_status }));
+  wordPattern.lastIndex = 0;
+  while ((match = wordPattern.exec(text))) {
+    const [raw, d, monthName, y] = match;
+    const start = match.index;
+    const end = start + raw.length;
+    const ctx = sentenceAt(text, start);
+    const month = monthNameToNumber(monthName);
+    if (!y) {
+      results.push(extracted(raw, ctx, null, { missingYear: true, sourceStartOffset: start, sourceEndOffset: end }));
+      continue;
     }
+    if (month == null) {
+      results.push(extracted(raw, ctx, null, { sourceStartOffset: start, sourceEndOffset: end }));
+      continue;
+    }
+    const parsed = parseStrictCivilDate(Number(y), month, Number(d));
+    results.push(extracted(raw, ctx, parsed.normalized_value, { parseStatus: parsed.parse_status, sourceStartOffset: start, sourceEndOffset: end }));
+  }
 
-    monthFirstPattern.lastIndex = 0;
-    while ((match = monthFirstPattern.exec(sentence))) {
-      const [raw, monthName, d, y] = match;
-      const month = monthNameToNumber(monthName);
-      if (!y) {
-        results.push(extracted(raw, sentence, null, { missingYear: true }));
-        continue;
-      }
-      if (month == null) {
-        results.push(extracted(raw, sentence, null));
-        continue;
-      }
-      const parsed = parseStrictCivilDate(Number(y), month, Number(d));
-      results.push(extracted(raw, sentence, parsed.normalized_value, { parseStatus: parsed.parse_status }));
+  monthFirstPattern.lastIndex = 0;
+  while ((match = monthFirstPattern.exec(text))) {
+    const [raw, monthName, d, y] = match;
+    const start = match.index;
+    const end = start + raw.length;
+    const ctx = sentenceAt(text, start);
+    const month = monthNameToNumber(monthName);
+    if (!y) {
+      results.push(extracted(raw, ctx, null, { missingYear: true, sourceStartOffset: start, sourceEndOffset: end }));
+      continue;
     }
+    if (month == null) {
+      results.push(extracted(raw, ctx, null, { sourceStartOffset: start, sourceEndOffset: end }));
+      continue;
+    }
+    const parsed = parseStrictCivilDate(Number(y), month, Number(d));
+    results.push(extracted(raw, ctx, parsed.normalized_value, { parseStatus: parsed.parse_status, sourceStartOffset: start, sourceEndOffset: end }));
+  }
 
-    relativePattern.lastIndex = 0;
-    while ((match = relativePattern.exec(sentence))) {
-      const raw = match[0];
-      const resolved = resolveRelativeToken(raw, reference);
-      results.push(extracted(raw, sentence, resolved, { parseStatus: resolved ? "valid" : "invalid" }));
-    }
+  relativePattern.lastIndex = 0;
+  while ((match = relativePattern.exec(text))) {
+    const raw = match[0];
+    const start = match.index;
+    const end = start + raw.length;
+    const resolved = resolveRelativeToken(raw, reference);
+    results.push(
+      extracted(raw, sentenceAt(text, start), resolved, {
+        parseStatus: resolved ? "valid" : "invalid",
+        sourceStartOffset: start,
+        sourceEndOffset: end,
+      })
+    );
   }
 
   const seen = new Set<string>();
   return results
     .filter((r) => {
-      const key = `${r.raw}-${r.context}-${r.date?.toISOString() ?? "null"}`;
+      const key = spanKey(r);
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     })
+    .sort((a, b) => a.sourceStartOffset - b.sourceStartOffset)
     .map((r, occurrenceIndex) => ({ ...r, occurrenceIndex }));
 }
 

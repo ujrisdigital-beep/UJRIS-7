@@ -3,7 +3,7 @@ import { estimateReadinessScore } from "@/lib/ai/heuristics";
 import { extractDates } from "@/lib/ai/heuristics";
 import { now } from "@/lib/clock";
 import { computeCaseUrgencyFromDeadlines } from "@/lib/legal/deadline-state";
-import { sourceEventFingerprint, utcCivilKey } from "@/lib/legal/deadline-confirmation";
+import { fingerprintFromExtracted, utcCivilKey } from "@/lib/legal/deadline-confirmation";
 import {
   isProceduralAttentionEvent,
   LIMITATION_INFERENCE_VERSION,
@@ -76,12 +76,8 @@ async function syncProceduralAttentionFromNarrative(kase: {
     if (!isProceduralAttentionEvent(item.eventType)) continue;
     const eventDate = item.date;
 
-    const fingerprint = sourceEventFingerprint({
-      eventType: item.eventType,
-      sourceDate: eventDate,
-      raw: item.raw,
-      occurrenceIndex: item.occurrenceIndex,
-    });
+    const fingerprint = fingerprintFromExtracted(item);
+    if (!fingerprint) continue;
 
     const already = kase.deadlines.some(
       (d) =>

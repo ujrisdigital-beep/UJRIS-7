@@ -4,7 +4,8 @@ import { db } from "@/lib/db";
 import { resetTestDatabase } from "../helpers/db";
 import { loginAs, seedUser } from "../helpers/seed";
 import { confirmDeadlineAction } from "@/lib/actions/cases";
-import { expectedDueDateFromSource, utcCivilKey } from "@/lib/legal/deadline-confirmation";
+import { expectedDueDateFromSource, fingerprintFromExtracted, utcCivilKey } from "@/lib/legal/deadline-confirmation";
+import { extractDates } from "@/lib/ai/heuristics";
 
 const MAR_12 = new Date(Date.UTC(2026, 2, 12));
 const MAR_18 = new Date(Date.UTC(2026, 2, 18));
@@ -33,6 +34,11 @@ async function seedLimitationDeadline(input: {
     },
   });
   const sourceEventDate = input.sourceEventDate ?? MAR_12;
+  const extracted = extractDates(input.narrative);
+  const hit =
+    extracted.find((d) => d.eventType === (input.sourceEventType ?? "dismissal") && d.date) ?? extracted[0];
+  const autoFingerprint =
+    input.sourceEventId !== undefined ? input.sourceEventId : fingerprintFromExtracted(hit);
   const deadline = await db.deadline.create({
     data: {
       caseId: kase.id,
@@ -44,7 +50,7 @@ async function seedLimitationDeadline(input: {
       ruleVersion: "1.0.0",
       sourceEventDate,
       sourceEventType: input.sourceEventType ?? "dismissal",
-      sourceEventId: input.sourceEventId ?? undefined,
+      sourceEventId: autoFingerprint ?? undefined,
       sourceRawDate: input.sourceRawDate === undefined ? "12 March 2026" : input.sourceRawDate,
       clockKind: input.clockKind ?? "legal_limitation",
       inferenceVersion: input.inferenceVersion ?? "limitation-inference/1.0.0",

@@ -4,7 +4,8 @@ import { db } from "@/lib/db";
 import { resetTestDatabase } from "../helpers/db";
 import { loginAs, seedCase, seedUser } from "../helpers/seed";
 import { confirmDeadlineAction, refreshCaseIntelligence } from "@/lib/actions/cases";
-import { expectedDueDateFromSource } from "@/lib/legal/deadline-confirmation";
+import { expectedDueDateFromSource, fingerprintFromExtracted } from "@/lib/legal/deadline-confirmation";
+import { extractDates } from "@/lib/ai/heuristics";
 
 describe("explicit deadline confirmation", () => {
   beforeEach(async () => {
@@ -13,17 +14,21 @@ describe("explicit deadline confirmation", () => {
 
   it("confirms only an allow-listed dismissal through an auditable owner action", async () => {
     const user = await seedUser();
+    const narrative = "I was dismissed on 11 April 2026 after raising a complaint about discrimination at work.";
     const kase = await db.case.create({
       data: {
         userId: user.id,
         title: "Dismissal case",
         situation: "dismissal",
-        narrative: "I was dismissed on 11 April 2026 after raising a complaint about discrimination at work.",
+        narrative,
         urgency: "low",
         readiness: 10,
       },
     });
     const sourceEventDate = new Date(Date.UTC(2026, 3, 11));
+    const sourceEventId = fingerprintFromExtracted(
+      extractDates(narrative).find((d) => d.eventType === "dismissal")!
+    );
     const deadline = await db.deadline.create({
       data: {
         caseId: kase.id,
@@ -35,6 +40,7 @@ describe("explicit deadline confirmation", () => {
         ruleVersion: "1.0.0",
         sourceEventDate,
         sourceEventType: "dismissal",
+        sourceEventId,
         calculationInputs: JSON.stringify({ effectiveDate: "2026-04-11" }),
         confirmationStatus: "unconfirmed",
         resolutionStatus: "unresolved",
@@ -74,7 +80,7 @@ describe("explicit deadline confirmation", () => {
       },
     });
     await loginAs(user);
-    expect(await confirmDeadlineAction(deadline.id)).toEqual({ ok: false, error: "invalid" });
+    expect(await confirmDeadlineAction(deadline.id)).toMatchObject({ ok: false, error: "invalid" });
     expect((await db.deadline.findUnique({ where: { id: deadline.id } }))?.confirmationStatus).toBe("unconfirmed");
   });
 
@@ -137,7 +143,7 @@ describe("explicit deadline confirmation", () => {
       },
     });
     await loginAs(user);
-    expect(await confirmDeadlineAction(deadline.id)).toEqual({ ok: false, error: "invalid" });
+    expect(await confirmDeadlineAction(deadline.id)).toMatchObject({ ok: false, error: "invalid" });
     expect((await db.deadline.findUnique({ where: { id: deadline.id } }))?.confirmationStatus).toBe("unconfirmed");
   });
 
@@ -170,7 +176,7 @@ describe("explicit deadline confirmation", () => {
       },
     });
     await loginAs(user);
-    expect(await confirmDeadlineAction(deadline.id)).toEqual({ ok: false, error: "invalid" });
+    expect(await confirmDeadlineAction(deadline.id)).toMatchObject({ ok: false, error: "invalid" });
     expect((await db.deadline.findUnique({ where: { id: deadline.id } }))?.confirmationStatus).toBe("unconfirmed");
   });
 });

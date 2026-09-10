@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { extractDates } from "@/lib/ai/heuristics";
 import { inferLimitationStart } from "@/lib/legal/date-inference";
 import { calculatePrimaryLimitationDate, higherUrgency, urgencyFromDays, daysUntil } from "@/lib/legal/deadlines";
-import { evaluateLimitationConfirmation } from "@/lib/legal/deadline-confirmation";
+import { evaluateLimitationConfirmation, fingerprintFromExtracted } from "@/lib/legal/deadline-confirmation";
 
 describe("limitation start date inference", () => {
   it("hearing date only is not a confirmed limitation start", () => {
@@ -115,12 +115,17 @@ describe("limitation start date inference", () => {
   });
 
   it("allows confirmation only for a single allow-listed provisional dismissal", () => {
+    const narrative = "I was dismissed on 11 April 2026 after raising a complaint about discrimination.";
+    const dates = extractDates(narrative);
+    const fingerprint = fingerprintFromExtracted(dates.find((d) => d.eventType === "dismissal")!);
     const ok = evaluateLimitationConfirmation({
       dueDate: new Date(Date.UTC(2026, 6, 10)),
       ruleId: "ERA_EQA_3M_LESS_1D",
       sourceEventDate: new Date(Date.UTC(2026, 3, 11)),
       sourceEventType: "dismissal",
-      narrative: "I was dismissed on 11 April 2026 after raising a complaint about discrimination.",
+      sourceEventId: fingerprint,
+      narrative,
+      extractedDates: dates,
     });
     expect(ok.allowed).toBe(true);
 

@@ -17,7 +17,7 @@ import {
   PROCEDURAL_RULE_ID,
   PROCEDURAL_RULE_VERSION,
 } from "@/lib/legal/event-semantics";
-import { sourceEventFingerprint, utcCivilKey } from "@/lib/legal/deadline-confirmation";
+import { fingerprintFromExtracted, utcCivilKey } from "@/lib/legal/deadline-confirmation";
 import { SITUATION_LABELS } from "@/lib/ai/situations";
 
 /**
@@ -132,14 +132,7 @@ export async function generateCaseAnalysis(input: {
       sourceEventType: derived.sourceEventType,
       confirmationStatus: "unconfirmed",
       clockKind: "legal_limitation",
-      sourceEventId: startExtracted
-        ? sourceEventFingerprint({
-            eventType: startExtracted.eventType,
-            sourceDate: startExtracted.date,
-            raw: startExtracted.raw,
-            occurrenceIndex: startExtracted.occurrenceIndex,
-          })
-        : null,
+      sourceEventId: startExtracted ? fingerprintFromExtracted(startExtracted) : null,
       sourceRawDate: startExtracted?.raw ?? null,
       sourceReference: startExtracted?.context.slice(0, 120) ?? null,
       inferenceVersion: LIMITATION_INFERENCE_VERSION,
@@ -150,13 +143,8 @@ export async function generateCaseAnalysis(input: {
   for (const extracted of analysis.dates) {
     if (!extracted.date || extracted.parseStatus !== "valid") continue;
     if (!isProceduralAttentionEvent(extracted.eventType)) continue;
-    const id = sourceEventFingerprint({
-      eventType: extracted.eventType,
-      sourceDate: extracted.date,
-      raw: extracted.raw,
-      occurrenceIndex: extracted.occurrenceIndex,
-    });
-    if (seenProcedural.has(id)) continue;
+    const id = fingerprintFromExtracted(extracted);
+    if (!id || seenProcedural.has(id)) continue;
     seenProcedural.add(id);
     deadlines.push({
       label:

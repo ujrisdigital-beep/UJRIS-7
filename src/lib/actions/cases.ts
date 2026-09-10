@@ -181,7 +181,7 @@ export async function completeActionItemAction(actionId: string): Promise<void> 
 
 export type DeadlineMutationResult =
   | { ok: true }
-  | { ok: false; error: "unauthenticated" | "forbidden" | "not_found" | "invalid" };
+  | { ok: false; error: "unauthenticated" | "forbidden" | "not_found" | "invalid"; reason?: string };
 
 /**
  * Records that the owner saw the warning. Does not resolve, confirm,
@@ -236,7 +236,7 @@ export async function confirmDeadlineAction(deadlineId: string): Promise<Deadlin
     narrative: deadline.case.narrative,
   });
   if (!decision.allowed) {
-    return { ok: false, error: "invalid" };
+    return { ok: false, error: "invalid", reason: decision.code };
   }
 
   await db.deadline.update({

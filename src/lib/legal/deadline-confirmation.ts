@@ -18,14 +18,15 @@
  * (two dismissals on 12 March) are two candidates.
  */
 
+import { createHash } from "node:crypto";
 import { analyzeNarrative, type ExtractedDate } from "@/lib/ai/heuristics";
+import { civilFromUtcDate, formatCivilDate } from "@/lib/legal/civil-date";
 import { parseLegalDate } from "@/lib/legal/strict-date";
 import { calculatePrimaryLimitationDate } from "@/lib/legal/deadlines";
 import {
   LIMITATION_INFERENCE_VERSION,
   LIMITATION_RULE_ID,
   mayStartLimitationClock,
-  stableSourceIdentity,
   type LegalEventType,
 } from "@/lib/legal/event-semantics";
 
@@ -38,6 +39,8 @@ export type ConfirmationRefusalReason =
   | "source_type_not_qualifying"
   | "source_date_changed"
   | "source_date_invalid"
+  | "source_identity_changed"
+  | "source_no_longer_present"
   | "rule_mismatch"
   | "stored_deadline_mismatch"
   | "requires_recalculation"
@@ -57,7 +60,7 @@ export type ConfirmationDecision =
     };
 
 export function utcCivilKey(d: Date): string {
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+  return formatCivilDate(civilFromUtcDate(d));
 }
 
 function refuse(
@@ -83,29 +86,53 @@ export interface StoredDeadlineProvenance {
 }
 
 export type SourceFingerprintInput = {
+  sourceId?: string;
+  sourceStartOffset: number;
+  sourceEndOffset: number;
   eventType: string;
-  sourceDate: Date;
-  raw: string;
-  occurrenceIndex: number;
+  civilDate: string;
+  raw?: string;
+  context?: string;
   inferenceVersion?: string;
 };
 
-function normalizeRaw(raw: string): string {
-  return raw.trim().toLowerCase().replace(/\s+/g, " ");
+function normalizeToken(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 /**
- * Stable source identity. Date equality is not identity.
- * Includes occurrence index + raw span so two same-day dismissals do not collapse.
+ * Stable source identity from the actual occurrence span plus raw/context
+ * so a same-date replacement or sentence rewrite cannot inherit provenance.
  */
 export function sourceEventFingerprint(input: SourceFingerprintInput): string {
-  return [
+  const payload = [
+    input.sourceId ?? "narrative",
+    String(input.sourceStartOffset),
+    String(input.sourceEndOffset),
     input.eventType,
-    utcCivilKey(input.sourceDate),
-    normalizeRaw(input.raw),
-    String(input.occurrenceIndex),
+    input.civilDate,
+    normalizeToken(input.raw ?? ""),
+    normalizeToken(input.context ?? ""),
     input.inferenceVersion ?? LIMITATION_INFERENCE_VERSION,
-  ].join("|");
+  ].join("\u001f");
+  return `span:${createHash("sha256").update(payload).digest("hex")}`;
+}
+
+export function fingerprintFromExtracted(d: ExtractedDate | null | undefined): string | null {
+  if (!d?.date || !d.civilDate) return null;
+  return sourceEventFingerprint({
+    sourceId: d.sourceId,
+    sourceStartOffset: d.sourceStartOffset,
+    sourceEndOffset: d.sourceEndOffset,
+    eventType: d.eventType,
+    civilDate: d.civilDate,
+    raw: d.raw,
+    context: d.context,
+  });
+}
+
+function isSpanFingerprint(storedId: string): boolean {
+  return /^span:[a-f0-9]{64}$/.test(storedId);
 }
 
 export function expectedDueDateFromSource(sourceEventDate: Date): Date {
@@ -116,30 +143,30 @@ export type QualifyingCandidate = {
   fingerprint: string;
   eventType: LegalEventType;
   date: Date;
+  civilDate: string;
   raw: string;
-  occurrenceIndex: number;
+  sourceStartOffset: number;
+  sourceEndOffset: number;
 };
 
 export function qualifyingCandidatesFromDates(dates: ExtractedDate[]): QualifyingCandidate[] {
   const candidates: QualifyingCandidate[] = [];
   const seen = new Set<string>();
   for (const d of dates) {
-    if (!d.date || d.parseStatus !== "valid") continue;
+    if (!d.date || d.parseStatus !== "valid" || !d.civilDate) continue;
     if (!mayStartLimitationClock(d.eventType)) continue;
-    const fingerprint = sourceEventFingerprint({
-      eventType: d.eventType,
-      sourceDate: d.date,
-      raw: d.raw,
-      occurrenceIndex: d.occurrenceIndex,
-    });
+    const fingerprint = fingerprintFromExtracted(d);
+    if (!fingerprint) continue;
     if (seen.has(fingerprint)) continue;
     seen.add(fingerprint);
     candidates.push({
       fingerprint,
       eventType: d.eventType,
       date: d.date,
+      civilDate: d.civilDate,
       raw: d.raw,
-      occurrenceIndex: d.occurrenceIndex,
+      sourceStartOffset: d.sourceStartOffset,
+      sourceEndOffset: d.sourceEndOffset,
     });
   }
   return candidates;
@@ -151,17 +178,10 @@ function dueDatesMatch(stored: Date, expected: Date): boolean {
 
 function storedIdentityMatchesCandidate(
   storedId: string | null | undefined,
-  candidate: QualifyingCandidate,
-  storedType: string,
-  storedDate: Date
+  candidate: QualifyingCandidate
 ): boolean {
-  if (!storedId) return true;
-  if (storedId === candidate.fingerprint) return true;
-  const legacy = stableSourceIdentity(storedType, storedDate);
-  if (storedId === legacy) {
-    return candidate.eventType === storedType && utcCivilKey(candidate.date) === utcCivilKey(storedDate);
-  }
-  return false;
+  if (!storedId) return false;
+  return storedId === candidate.fingerprint;
 }
 
 /**
@@ -254,11 +274,19 @@ export function evaluateLimitationConfirmation(input: StoredDeadlineProvenance):
   }
 
   const sole = candidates[0]!;
-  if (input.sourceEventId && !storedIdentityMatchesCandidate(input.sourceEventId, sole, eventType, input.sourceEventDate)) {
+  const storedId = input.sourceEventId ?? null;
+  if (!storedId || !isSpanFingerprint(storedId)) {
     return refuse(
       "insufficient_data",
-      "Stored source_event_id does not match the unique current qualifying candidate.",
-      "source_event_not_found"
+      "Stored source identity is missing or is not a span fingerprint. Same-date provenance cannot be assumed.",
+      "source_identity_changed"
+    );
+  }
+  if (!storedIdentityMatchesCandidate(storedId, sole)) {
+    return refuse(
+      "insufficient_data",
+      "The original source span is no longer present. A same-date replacement cannot inherit confirmation provenance.",
+      "source_no_longer_present"
     );
   }
 
@@ -270,7 +298,7 @@ export function evaluateLimitationConfirmation(input: StoredDeadlineProvenance):
     );
   }
 
-  if (utcCivilKey(sole.date) !== utcCivilKey(input.sourceEventDate)) {
+  if (sole.civilDate !== utcCivilKey(input.sourceEventDate) && utcCivilKey(sole.date) !== utcCivilKey(input.sourceEventDate)) {
     return refuse(
       "insufficient_data",
       "The stored source date is not the unique current qualifying candidate. Recalculation is required.",
