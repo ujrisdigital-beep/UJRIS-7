@@ -1,6 +1,7 @@
 import { addDays } from "date-fns";
 import { monthNameToNumber, parseLegalDate, parseNumericDateToken, parseStrictCivilDate, type ParseStatus } from "@/lib/legal/strict-date";
 import { classifyLegalEventType, type LegalEventType } from "@/lib/legal/event-semantics";
+import { addLondonCivilDays, londonCivilUtcDate, now } from "@/lib/clock";
 
 /**
  * Deterministic, explainable "signal extraction" engine.
@@ -91,6 +92,7 @@ export interface ExtractedDate {
   eventType: LegalEventType;
   parseStatus: ParseStatus;
   provenance: "narrative_extraction";
+  occurrenceIndex: number;
 }
 
 const MONTHS = [
@@ -102,7 +104,7 @@ function extracted(
   raw: string,
   context: string,
   date: Date | null,
-  extra: { missingYear?: boolean; ambiguousNumeric?: boolean; parseStatus?: ParseStatus } = {}
+  extra: { missingYear?: boolean; ambiguousNumeric?: boolean; parseStatus?: ParseStatus; occurrenceIndex?: number } = {}
 ): ExtractedDate {
   const eventType = classifyLegalEventType(context);
   const parseStatus: ParseStatus = extra.parseStatus
@@ -118,11 +120,42 @@ function extracted(
     eventType,
     parseStatus,
     provenance: "narrative_extraction",
+    occurrenceIndex: extra.occurrenceIndex ?? 0,
   };
 }
 
-/** Extract calendar dates mentioned in free text. Invalid civil dates are not rolled over. */
-export function extractDates(text: string): ExtractedDate[] {
+const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+function resolveRelativeToken(raw: string, reference: Date): Date | null {
+  const token = raw.toLowerCase();
+  if (token === "today") return londonCivilUtcDate(reference);
+  if (token === "tomorrow") return addLondonCivilDays(reference, 1);
+  if (token === "yesterday") return addLondonCivilDays(reference, -1);
+  const inDays = token.match(/^in (\d+) days?$/);
+  if (inDays) return addLondonCivilDays(reference, Number(inDays[1]));
+  const nextWeekday = token.match(/^next (sunday|monday|tuesday|wednesday|thursday|friday|saturday)$/);
+  if (nextWeekday) {
+    const target = WEEKDAYS.indexOf(nextWeekday[1]);
+    const { year, month, day } = londonCivilPartsFromInstant(reference);
+    const current = new Date(Date.UTC(year, month - 1, day));
+    const currentDow = current.getUTCDay();
+    let delta = (target - currentDow + 7) % 7;
+    if (delta === 0) delta = 7;
+    return addLondonCivilDays(reference, delta);
+  }
+  return null;
+}
+
+function londonCivilPartsFromInstant(instant: Date) {
+  return {
+    year: londonCivilUtcDate(instant).getUTCFullYear(),
+    month: londonCivilUtcDate(instant).getUTCMonth() + 1,
+    day: londonCivilUtcDate(instant).getUTCDate(),
+  };
+}
+
+/** Extract calendar dates mentioned in free text. Invalid civil dates are not rolled over. Relative words require the injectable clock. */
+export function extractDates(text: string, reference: Date = now()): ExtractedDate[] {
   const results: ExtractedDate[] = [];
   const sentences = text.split(/(?<=[.!?\n])\s+/);
 
@@ -133,6 +166,7 @@ export function extractDates(text: string): ExtractedDate[] {
     "gi"
   );
   const monthFirstPattern = new RegExp(`\\b(${MONTHS.join("|")})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(\\d{4}))?\\b`, "gi");
+  const relativePattern = /\b(today|tomorrow|yesterday|in \d+ days?|next (?:sunday|monday|tuesday|wednesday|thursday|friday|saturday))\b/gi;
 
   for (const sentence of sentences) {
     let match: RegExpExecArray | null;
@@ -186,15 +220,24 @@ export function extractDates(text: string): ExtractedDate[] {
       const parsed = parseStrictCivilDate(Number(y), month, Number(d));
       results.push(extracted(raw, sentence, parsed.normalized_value, { parseStatus: parsed.parse_status }));
     }
+
+    relativePattern.lastIndex = 0;
+    while ((match = relativePattern.exec(sentence))) {
+      const raw = match[0];
+      const resolved = resolveRelativeToken(raw, reference);
+      results.push(extracted(raw, sentence, resolved, { parseStatus: resolved ? "valid" : "invalid" }));
+    }
   }
 
   const seen = new Set<string>();
-  return results.filter((r) => {
-    const key = `${r.raw}-${r.context}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  return results
+    .filter((r) => {
+      const key = `${r.raw}-${r.context}-${r.date?.toISOString() ?? "null"}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((r, occurrenceIndex) => ({ ...r, occurrenceIndex }));
 }
 
 /** Simple heuristic entity extraction: roles mentioned near capitalised names. */
@@ -303,5 +346,5 @@ export function estimateReadinessScore(input: {
 }
 
 export function nearFutureReminder(days: number) {
-  return addDays(new Date(), days);
+  return addDays(now(), days);
 }
