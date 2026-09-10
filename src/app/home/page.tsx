@@ -9,6 +9,7 @@ import { UrgencyBadge } from "@/components/urgency-badge";
 import { entitlementsFor } from "@/lib/plans";
 import { ArrowRight, Plus, Sparkles } from "lucide-react";
 import { format } from "date-fns";
+import { mostImportantUnresolvedDeadline } from "@/lib/legal/deadline-state";
 
 const URGENCY_RANK: Record<string, number> = { critical: 0, high: 1, standard: 2, low: 3 };
 
@@ -20,7 +21,7 @@ export default async function HomePage() {
     where: { userId: user.id, status: { not: "archived" } },
     include: {
       actions: { where: { status: { not: "done" } }, orderBy: { priority: "desc" } },
-      deadlines: { where: { acknowledged: false }, orderBy: { dueDate: "asc" } },
+      deadlines: { where: { resolutionStatus: { not: "resolved" } }, orderBy: { dueDate: "asc" } },
     },
     orderBy: { updatedAt: "desc" },
   });
@@ -32,6 +33,7 @@ export default async function HomePage() {
   const others = cases.filter((c) => c.id !== primary.id);
   const plan = entitlementsFor(user.plan);
   const canCreateNew = cases.length < plan.maxCases;
+  const primaryDate = mostImportantUnresolvedDeadline(primary.deadlines);
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -67,6 +69,12 @@ export default async function HomePage() {
                     <p className="mt-2 flex items-center gap-1.5 text-sm text-muted-foreground">
                       <Sparkles className="h-3.5 w-3.5 text-primary" />
                       Next: {primary.actions[0].title}
+                    </p>
+                  )}
+                  {primaryDate && (
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      Most important date: {format(primaryDate.dueDate, "d MMMM yyyy")}
+                      {primaryDate.acknowledged ? " · acknowledged" : ""}
                     </p>
                   )}
                 </div>

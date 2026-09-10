@@ -9,6 +9,7 @@ import { CaseJourney } from "@/components/case/case-journey";
 import { ActionItemRow } from "@/components/case/action-item-row";
 import { TruthLayerBadge } from "@/components/truth-layer-badge";
 import { daysUntil } from "@/lib/legal/deadlines";
+import { mostImportantUnresolvedDeadline } from "@/lib/legal/deadline-state";
 import { ArrowRight, Sparkles, Users2, FileText } from "lucide-react";
 import { format } from "date-fns";
 
@@ -34,7 +35,7 @@ export default async function CaseOverviewPage({ params }: { params: Promise<{ c
   const brief = kase.briefs[0];
   const pendingActions = kase.actions.filter((a) => a.status !== "done");
   const topAction = pendingActions[0];
-  const nextDeadline = kase.deadlines.filter((d) => !d.acknowledged)[0];
+  const nextDeadline = mostImportantUnresolvedDeadline(kase.deadlines);
 
   return (
     <div className="space-y-6">
@@ -80,12 +81,20 @@ export default async function CaseOverviewPage({ params }: { params: Promise<{ c
         <Card className="border-amber-300/60 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30">
           <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-6">
             <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-amber-800 dark:text-amber-300">Most important date</p>
+              <p className="text-xs font-medium uppercase tracking-wide text-amber-800 dark:text-amber-300">
+                Most important date
+                {nextDeadline.acknowledged ? " · acknowledged" : ""}
+              </p>
               <p className="mt-0.5 font-medium">{nextDeadline.label}</p>
               <p className="text-sm text-muted-foreground">
                 {format(nextDeadline.dueDate, "EEEE d MMMM yyyy")} · {Math.abs(daysUntil(nextDeadline.dueDate))} days{" "}
                 {daysUntil(nextDeadline.dueDate) < 0 ? "overdue" : "remaining"}
               </p>
+              {nextDeadline.acknowledged && (
+                <p className="mt-1 text-xs text-amber-800/80 dark:text-amber-300/80">
+                  You have seen this warning. It remains active until it is resolved or no longer applies.
+                </p>
+              )}
             </div>
             <Button variant="outline" render={<Link href={`/cases/${caseId}/deadlines`} />}>
               View deadlines

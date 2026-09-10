@@ -35,7 +35,7 @@ export function DeadlineCard({
   }
 
   return (
-    <div className={cn("rounded-lg border border-border/70 bg-card p-4", ack && "opacity-70")}>
+    <div className={cn("rounded-lg border border-border/70 bg-card p-4", ack && "border-dashed")}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex gap-3">
           <CalendarClock className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
@@ -66,7 +66,9 @@ export function DeadlineCard({
             Acknowledge
           </button>
         )}
-        {ack && <span className="text-xs text-muted-foreground">Acknowledged</span>}
+        {ack && (
+          <span className="text-xs font-medium text-muted-foreground">Acknowledged — still active</span>
+        )}
       </div>
     </div>
   );
