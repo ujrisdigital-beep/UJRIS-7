@@ -196,8 +196,21 @@ export function parseAuditJson(raw, meta = {}) {
   if (meta.timedOut) {
     return { ok: false, result: "ERROR", reason: "timeout" };
   }
+  if (meta.launched === false) {
+    return { ok: false, result: "ERROR", reason: "audit_command_failed", detail: String(meta.spawnError || "not launched") };
+  }
   if (meta.spawnError) {
     return { ok: false, result: "ERROR", reason: "audit_command_failed", detail: String(meta.spawnError) };
+  }
+  if (meta.signal) {
+    return { ok: false, result: "ERROR", reason: "signal_exit", detail: String(meta.signal) };
+  }
+  const exitCode = meta.exitCode;
+  if (exitCode != null && exitCode !== 0 && exitCode !== 1) {
+    return { ok: false, result: "ERROR", reason: "unexpected_exit", detail: String(exitCode) };
+  }
+  if (exitCode == null && meta.launched === true) {
+    return { ok: false, result: "ERROR", reason: "unexpected_exit", detail: "missing_exit_code" };
   }
   const text = raw == null ? "" : String(raw);
   if (!text.trim()) {
@@ -218,7 +231,7 @@ export function parseAuditJson(raw, meta = {}) {
   if (!parsed.vulnerabilities || typeof parsed.vulnerabilities !== "object" || Array.isArray(parsed.vulnerabilities)) {
     return { ok: false, result: "ERROR", reason: "missing_vulnerabilities" };
   }
-  return { ok: true, result: "PARSED", audit: parsed, exitCode: meta.exitCode ?? 0 };
+  return { ok: true, result: "PARSED", audit: parsed, exitCode: exitCode ?? 0 };
 }
 
 export function recordsFromAudit(audit) {
@@ -261,6 +274,8 @@ export function evaluateAuditPolicy(input, policy, today) {
     exitCode: input.exitCode,
     spawnError: input.spawnError,
     timedOut: input.timedOut,
+    launched: input.launched,
+    signal: input.signal,
   });
   if (!parsed.ok) {
     return {

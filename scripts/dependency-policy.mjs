@@ -3,14 +3,14 @@
  * Classifies npm audit findings against a reviewed exception list.
  *
  * Policy result is PASS | FAIL | ERROR.
- * ERROR (parser/service/timeout/malformed) exits 2 and never looks clean.
+ * ERROR (parser/service/timeout/malformed/spawn) exits 2 and never looks clean.
  * npm audit often exits 1 when vulnerabilities exist — that is evaluated,
  * not treated as an execution failure.
  */
-import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnNpm } from "./command-runner.mjs";
 import { evaluateAuditPolicy } from "./dependency-match.mjs";
 
 const root = process.cwd();
@@ -19,32 +19,50 @@ const outDir = path.join(root, "docs/audits");
 
 const AUDIT_TIMEOUT_MS = 120_000;
 
-export function runNpmAuditJson(spawnImpl = spawn, timeoutMs = AUDIT_TIMEOUT_MS) {
+export function emptyAuditRun(overrides = {}) {
+  return {
+    launched: false,
+    exitCode: null,
+    signal: null,
+    stdout: "",
+    stderr: "",
+    spawnError: null,
+    timedOut: false,
+    ...overrides,
+  };
+}
+
+export function runNpmAuditJson(spawnNpmImpl = spawnNpm, timeoutMs = AUDIT_TIMEOUT_MS) {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (value) => {
       if (settled) return;
       settled = true;
-      resolve(value);
+      resolve(emptyAuditRun(value));
     };
 
     let child;
     try {
-      child = spawnImpl("npm", ["audit", "--json"], { stdio: ["ignore", "pipe", "pipe"] });
+      child = spawnNpmImpl(["audit", "--json"], { stdio: ["ignore", "pipe", "pipe"] });
     } catch (error) {
-      finish({ stdout: "", stderr: "", exitCode: null, spawnError: error.message });
+      finish({
+        launched: false,
+        spawnError: error instanceof Error ? error.message : String(error),
+        stderr: error instanceof Error && "code" in error ? String(error.code) : "",
+      });
       return;
     }
 
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       try {
         child.kill("SIGKILL");
       } catch {
         /* ignore */
       }
-      finish({ stdout, stderr, exitCode: null, timedOut: true, spawnError: "timeout" });
     }, timeoutMs);
 
     if (child.stdout) {
@@ -61,11 +79,29 @@ export function runNpmAuditJson(spawnImpl = spawn, timeoutMs = AUDIT_TIMEOUT_MS)
     }
     child.on("error", (error) => {
       clearTimeout(timer);
-      finish({ stdout, stderr, exitCode: null, spawnError: error.message });
+      finish({
+        launched: false,
+        stdout,
+        stderr,
+        exitCode: null,
+        signal: null,
+        spawnError: error.message,
+      });
     });
-    child.on("close", (code) => {
+    child.on("exit", () => {
+      /* close is authoritative after stdio flush */
+    });
+    child.on("close", (code, signal) => {
       clearTimeout(timer);
-      finish({ stdout, stderr, exitCode: code });
+      finish({
+        launched: true,
+        stdout,
+        stderr,
+        exitCode: code,
+        signal,
+        timedOut,
+        spawnError: timedOut ? "timeout" : null,
+      });
     });
   });
 }
@@ -75,8 +111,7 @@ export async function runDependencyPolicy({
   today = new Date().toISOString().slice(0, 10),
   auditRun,
 } = {}) {
-  const loadedPolicy =
-    policy ?? JSON.parse(readFileSync(exceptionsPath, "utf8"));
+  const loadedPolicy = policy ?? JSON.parse(readFileSync(exceptionsPath, "utf8"));
   const run = auditRun ?? (await runNpmAuditJson());
   return evaluateAuditPolicy(run, loadedPolicy, today);
 }
