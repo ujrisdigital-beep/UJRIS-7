@@ -5,7 +5,7 @@
 > and what's next. Update it as part of every ticket — a ticket is not
 > done until this file reflects reality.
 
-Last updated: 2026-09-10 (ticket: Step 2A-R2 final gate remediation — see Ticket Log).
+Last updated: 2026-09-10 (ticket: Step 2A-R3 final blocker remediation — see Ticket Log).
 
 ## 1. What UJRIS is
 
@@ -75,6 +75,20 @@ full record. Summary:
   `docs/security/DEPENDENCY_EXCEPTION_REGISTER.md`.
   `docs/security/SECURITY_REGRESSION_MATRIX.md`.
 
+**Step 2A-R3 invariants (must hold):**
+
+- **Confirmation:** stored source still exists, uniquely identifiable by
+  fingerprint (not type+date), type still qualifying, source date unchanged,
+  rule matches, stored due date equals the recomputed UTC civil due date,
+  and no second qualifying limitation-start candidate exists.
+- **Procedural urgency:** relative dates resolve against an injectable
+  Europe/London clock; a hearing tomorrow persists as procedural attention
+  and remains HIGH/CRITICAL across refresh until resolved.
+- **Dependency fail-closed:** advisory + package + path class
+  (`dev_tooling` / `production_runtime` / `unknown`); audit ERROR ≠ PASS.
+- **E2E lifecycle:** `scripts/e2e-run.mjs` is the sole owner; disposable
+  `prisma/e2e.db`; two consecutive `npm run test:e2e` exit 0 with port 4127 free.
+
 **Target architecture** (Supabase Postgres + Supabase Auth + RLS + Stripe
 as sole entitlement writer + structured forensic findings + FACT/INFERENCE/
 LEGAL_SOURCE/CALCULATION/SUGGESTION/NEEDS_REVIEW taxonomy) is recorded in
@@ -125,8 +139,9 @@ table by table, never as a single rewrite.
 - No RLS, no Supabase — see ADR-0002. **Do not start Supabase in a
   follow-on until Step 2A independent review passes.**
 - Playwright E2E is smoke-only (landing + login + unauthenticated
-  evidence GET). GitHub Actions **does** run `npm run test:e2e` via a
-  Node supervisor on port 4127, then verifies the port is free.
+  evidence GET). GitHub Actions runs the same `npm run test:e2e` twice
+  (`scripts/e2e-run.mjs` owns Next + Playwright) and verifies port 4127
+  is free after each run.
 - No AI usage/cost observability / grounding validation (Codex finding 10;
   out of scope for Step 2A).
 - Forensic findings are still a JSON blob at runtime; schema is design-only.
@@ -169,6 +184,29 @@ should all pass cleanly before any ticket is considered done — see Ticket
 Log for the last verified run of each.
 
 ## 7. Ticket log
+
+### 2026-09-10 — Step 2A-R3 (Codex 2A-R2 FAIL — final blocker remediation)
+
+Branch: `step-2a-security-test-foundation` — **not merged**. Step 2B /
+Supabase **not started**. Forensic worker **not implemented**.
+
+Codex independently reproduced four remaining blockers: confirmation
+accepting wrong due dates / same-day source collapse / competing
+candidates; “My hearing is tomorrow” dropping HIGH→STANDARD on refresh;
+dependency policy inheriting runtime paths and treating audit-service
+errors as PASS; E2E teardown hang + Vitest/E2E clean-checkout failure.
+
+Remediation: confirmation invariant (fingerprint + recomputed due date);
+injectable clock + procedural hearing persistence through refresh;
+path-class fail-closed audit policy (`PASS|FAIL|ERROR`); single-owner
+`scripts/e2e-run.mjs` with disposable `e2e.db`.
+
+See `docs/implementation/STEP2A_R3_PLAN.md` and
+`docs/implementation/STEP2A_R3_IMPLEMENTATION_REPORT.md`.
+
+**Requires independent review:** YES — return this branch to Codex for
+one final merge gate. Do not merge. Do not start Supabase. Do not claim
+production-ready.
 
 ### 2026-09-10 — Step 2A-R2 (Codex 2A-R re-check FAIL — final gate)
 

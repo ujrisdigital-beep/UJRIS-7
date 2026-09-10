@@ -99,7 +99,7 @@ Candidate fingerprint: `eventType|civilKey|raw|occurrenceIndex|inferenceVersion`
 
 **REPRODUCTION.** Codex: assertions green, process must be interrupted. Clean clone: Vitest fails before collection; E2E DB init fails.
 
-**FIX.** Single-owner `scripts/e2e-run.mjs` as above; disposable `file:./e2e.db` (gitignored); Playwright `PLAYWRIGHT_SKIP_WEBSERVER=1` when launched by the owner. Vitest migrate via `scripts/prisma-migrate.mjs` using `require.resolve("prisma")` (no npx). Pin Node `>=20 <23` and `.nvmrc` `22`. `npm run test:e2e` twice must exit 0 with port 4127 free after each.
+**FIX.** Single-owner `scripts/e2e-run.mjs` as above; disposable `prisma/e2e.db` (gitignored; Prisma resolves `file:./e2e.db` next to the schema); Playwright `PLAYWRIGHT_SKIP_WEBSERVER=1` when launched by the owner. Vitest migrate via `scripts/prisma-migrate.mjs` using `require.resolve("prisma")` (no npx). Pin Node `>=20 <23` and `.nvmrc` `22`. `npm run test:e2e` twice must exit 0 with port 4127 free after each.
 
 **BOUNDARY TEST.** Two consecutive `npm run test:e2e` from a temp clone; port bind after each; `npm run test:unit` on a tree with no `test.db` / no `.next`.
 

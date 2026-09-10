@@ -28,13 +28,17 @@ Owner: UJRIS engineering — Step 2A security track
 | Decision | accept_temporary_dev_only |
 | Reason | Confined to Prisma CLI config merger (devDependency). Exception is keyed to GHSA-ggr8-5vv4-36mx only. |
 
-A **different** High on `deepmerge-ts`, a Critical on the same package, an
-unexpected runtime path (for example `@prisma/client`), or an expired
-exception **fails** `npm run test:audit-policy`. Never “ignore all Highs
-for package X”.
+A **different** High on `deepmerge-ts`, a Critical on the same package, a
+**production_runtime** path (for example `@prisma/client`), an **unknown**
+path, or an expired exception **fails** `npm run test:audit-policy`.
+Audit-service errors, malformed JSON, empty/truncated output, and timeouts
+are **ERROR** (exit 2), never a clean PASS.
+
+Exception EX-DEP-001 `acceptedPathClasses`: **`dev_tooling` only**.
 
 CI behaviour: the policy test is the gate. Raw `npm audit --audit-level=high`
-is allowed to be nonzero for this documented advisory.
+is allowed to be nonzero for this documented advisory (and any Moderate
+findings npm still prints).
 
 Machine-readable copy: `docs/security/dependency-exceptions.json`.
 Matcher: `scripts/dependency-match.mjs`.

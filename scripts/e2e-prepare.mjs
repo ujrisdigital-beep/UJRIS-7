@@ -17,8 +17,11 @@ function removeIfPresent(filePath) {
 }
 
 export function prepareE2eDatabase(root = process.cwd()) {
+  // Prisma SQLite URLs are resolved relative to prisma/schema.prisma.
   removeIfPresent(path.join(root, "e2e.db"));
   removeIfPresent(path.join(root, "e2e.db-journal"));
+  removeIfPresent(path.join(root, "prisma", "e2e.db"));
+  removeIfPresent(path.join(root, "prisma", "e2e.db-journal"));
   migrateDeploy(E2E_DATABASE_URL);
   return E2E_DATABASE_URL;
 }
