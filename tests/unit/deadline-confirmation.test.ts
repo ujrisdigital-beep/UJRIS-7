@@ -1,19 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { addDays } from "date-fns";
 import { extractDates } from "@/lib/ai/heuristics";
-import { evaluateLimitationConfirmation } from "@/lib/legal/deadline-confirmation";
+import { evaluateLimitationConfirmation, type StoredDeadlineProvenance } from "@/lib/legal/deadline-confirmation";
 import { LIMITATION_INFERENCE_VERSION, LIMITATION_RULE_ID, stableSourceIdentity } from "@/lib/legal/event-semantics";
 
 const due = addDays(new Date(), 10);
 const mar12 = new Date(Date.UTC(2026, 2, 12));
 const mar18 = new Date(Date.UTC(2026, 2, 18));
 
-function confirm(partial: Parameters<typeof evaluateLimitationConfirmation>[0]) {
+function confirm(partial: Partial<StoredDeadlineProvenance> & Pick<StoredDeadlineProvenance, "narrative">) {
   return evaluateLimitationConfirmation({
     clockKind: "legal_limitation",
     dueDate: due,
     ruleId: LIMITATION_RULE_ID,
     inferenceVersion: LIMITATION_INFERENCE_VERSION,
+    sourceEventDate: null,
+    sourceEventType: "unknown",
     ...partial,
   });
 }
