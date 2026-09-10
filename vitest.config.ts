@@ -18,6 +18,7 @@ export default defineConfig({
       DATABASE_URL: "file:./test.db",
       AUTH_SECRET: "test-auth-secret-that-is-long-enough-32ch",
       UJRIS_RATE_LIMIT_MAX_BUCKETS: "32",
+      NODE_ENV: "test",
     },
   },
   resolve: {
