@@ -6,10 +6,12 @@ import {
   exceptionMatchesRecord,
   evaluateExceptionGate,
   parseAuditJson,
+  recordsFromAudit,
 } from "../../scripts/dependency-match.mjs";
 
 const exception = {
   id: "GHSA-ggr8-5vv4-36mx",
+  advisoryId: "GHSA-ggr8-5vv4-36mx",
   package: "deepmerge-ts",
   alsoAppliesTo: ["prisma", "@prisma/config"],
   severity: "high",
@@ -229,7 +231,7 @@ describe("dependency exception matching", () => {
     expect(outcome.exitCode).toBe(0);
   });
 
-  it("accepts an inherited parent record that names the excepted package", () => {
+  it("does not accept an inherited parent record that only names the excepted package", () => {
     const result = exceptionMatchesRecord(
       {
         package: "prisma",
@@ -240,10 +242,11 @@ describe("dependency exception matching", () => {
       },
       exception
     );
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("advisory_mismatch");
   });
 
-  it("accepts an inherited parent whose via name is another package in the same registered cluster", () => {
+  it("does not accept an inherited parent whose via name is another package in the same cluster", () => {
     const result = exceptionMatchesRecord(
       {
         package: "prisma",
@@ -254,7 +257,8 @@ describe("dependency exception matching", () => {
       },
       exception
     );
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("advisory_mismatch");
   });
 
   it("rejects a second High advisory on the same package even if the known GHSA is also listed", () => {
@@ -289,5 +293,150 @@ describe("dependency exception matching", () => {
     const outcome = evaluateAuditPolicy({ stdout: "truncated{", exitCode: 0 }, policy, "2026-09-10");
     expect(outcome.result).not.toBe("PASS");
     expect(outcome.exitCode).toBe(2);
+  });
+});
+
+describe("R5 exception identity matrix", () => {
+  const approvedDev = {
+    package: "deepmerge-ts",
+    severity: "high",
+    ghsaIds: ["GHSA-ggr8-5vv4-36mx"],
+    viaNames: [],
+    nodes: ["node_modules/deepmerge-ts"],
+  };
+
+  it("A: exact approved advisory + approved dev_tooling path + not expired is temporary PASS", () => {
+    expect(exceptionMatchesRecord(approvedDev, exception).ok).toBe(true);
+    const outcome = evaluateAuditPolicy(
+      { stdout: JSON.stringify(auditWith([approvedDev])), exitCode: 1 },
+      policy,
+      "2026-09-10"
+    );
+    expect(outcome.result).toBe("PASS");
+  });
+
+  it("B: different High advisory + same package + same path fails", () => {
+    const record = {
+      ...approvedDev,
+      ghsaIds: ["GHSA-aaaa-bbbb-cccc"],
+    };
+    expect(exceptionMatchesRecord(record, exception).ok).toBe(false);
+    expect(evaluateExceptionGate([record], policy, "2026-09-10").length).toBeGreaterThan(0);
+  });
+
+  it("C: unknown High advisory + same package/path fails", () => {
+    const record = {
+      package: "prisma",
+      severity: "high",
+      ghsaIds: ["GHSA-unkn-own0-advs"],
+      viaNames: ["deepmerge-ts"],
+      nodes: ["node_modules/prisma"],
+    };
+    expect(exceptionMatchesRecord(record, exception).ok).toBe(false);
+    const outcome = evaluateAuditPolicy(
+      { stdout: JSON.stringify(auditWith([record])), exitCode: 1 },
+      policy,
+      "2026-09-10"
+    );
+    expect(outcome.result).toBe("FAIL");
+  });
+
+  it("D: missing advisory ID + same package/path fails (mutation: package/path-only matching would pass)", () => {
+    const record = {
+      package: "deepmerge-ts",
+      severity: "high",
+      ghsaIds: [],
+      viaNames: ["deepmerge-ts"],
+      nodes: ["node_modules/deepmerge-ts"],
+    };
+    expect(exceptionMatchesRecord(record, exception).ok).toBe(false);
+    expect(exceptionMatchesRecord(record, exception).reason).toBe("advisory_mismatch");
+    const failures = evaluateExceptionGate([record], policy, "2026-09-10");
+    expect(failures.some((f) => /missing advisory id/i.test(f))).toBe(true);
+  });
+
+  it("E: approved advisory + production_runtime fails", () => {
+    const record = { ...approvedDev, nodes: ["node_modules/@prisma/client"] };
+    expect(exceptionMatchesRecord(record, exception).ok).toBe(false);
+    expect(evaluateExceptionGate([record], policy, "2026-09-10").length).toBeGreaterThan(0);
+  });
+
+  it("F: approved advisory + unknown path fails", () => {
+    const record = { ...approvedDev, nodes: ["node_modules/left-pad"] };
+    expect(exceptionMatchesRecord(record, exception).ok).toBe(false);
+    expect(evaluateExceptionGate([record], policy, "2026-09-10").length).toBeGreaterThan(0);
+  });
+
+  it("G: approved advisory + expired exception fails", () => {
+    const failures = evaluateExceptionGate(
+      [approvedDev],
+      { exceptions: [{ ...exception, expires: "2026-01-01" }] },
+      "2026-09-10"
+    );
+    expect(failures.some((f) => /Expired/i.test(f))).toBe(true);
+  });
+
+  it("H: Critical advisory through the same dependency cluster fails", () => {
+    const failures = evaluateExceptionGate([{ ...approvedDev, severity: "critical" }], policy, "2026-09-10");
+    expect(failures.some((f) => /Critical/i.test(f))).toBe(true);
+  });
+
+  it("I: multiple advisories where only one is excepted still fail", () => {
+    const outcome = evaluateAuditPolicy(
+      {
+        stdout: JSON.stringify(
+          auditWith([
+            approvedDev,
+            {
+              package: "deepmerge-ts",
+              severity: "high",
+              ghsaIds: ["GHSA-zzzz-yyyy-xxxx"],
+              nodes: ["node_modules/deepmerge-ts"],
+            },
+          ])
+        ),
+        exitCode: 1,
+      },
+      policy,
+      "2026-09-10"
+    );
+    expect(outcome.result).toBe("FAIL");
+  });
+
+  it("J: malformed advisory object is ERROR/fail-closed", () => {
+    const outcome = evaluateAuditPolicy(
+      { stdout: JSON.stringify({ vulnerabilities: { foo: "not-an-object" } }), exitCode: 1 },
+      policy,
+      "2026-09-10"
+    );
+    expect(outcome.result).toBe("ERROR");
+    expect(outcome.exitCode).toBe(2);
+    expect(outcome.reason).toBe("malformed_vulnerability");
+  });
+
+  it("reconstructs GHSA identity from a parent via-name once the sibling carries the advisory URL", () => {
+    const audit = {
+      vulnerabilities: {
+        "deepmerge-ts": {
+          severity: "high",
+          via: [{ url: "https://github.com/advisories/GHSA-ggr8-5vv4-36mx", name: "deepmerge-ts" }],
+          nodes: ["node_modules/deepmerge-ts"],
+        },
+        prisma: {
+          severity: "high",
+          via: ["deepmerge-ts"],
+          nodes: ["node_modules/prisma"],
+        },
+      },
+    };
+    const records = recordsFromAudit(audit);
+    const parent = records.find((row) => row.package === "prisma") as { ghsaIds: string[] };
+    expect(parent.ghsaIds).toEqual(["GHSA-GGR8-5VV4-36MX"]);
+    const outcome = evaluateAuditPolicy(
+      { stdout: JSON.stringify(audit), exitCode: 1 },
+      policy,
+      "2026-09-10"
+    );
+    expect(outcome.result).toBe("PASS");
   });
 });
