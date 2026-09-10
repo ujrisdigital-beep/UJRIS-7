@@ -47,6 +47,7 @@ export type ConfirmationRefusalReason =
   | "requires_review"
   | "ambiguous"
   | "competing_qualifying_source"
+  | "unresolved_qualifying_source"
   | "inference_version_mismatch"
   | "missing_fields";
 
@@ -150,26 +151,75 @@ export type QualifyingCandidate = {
 };
 
 export function qualifyingCandidatesFromDates(dates: ExtractedDate[]): QualifyingCandidate[] {
-  const candidates: QualifyingCandidate[] = [];
+  return qualifyingSourceOccurrences(dates)
+    .filter((o): o is QualifyingSourceOccurrence & { fingerprint: string; date: Date; civilDate: string } => o.resolved)
+    .map((o) => ({
+      fingerprint: o.fingerprint,
+      eventType: o.eventType,
+      date: o.date,
+      civilDate: o.civilDate,
+      raw: o.raw,
+      sourceStartOffset: o.sourceStartOffset,
+      sourceEndOffset: o.sourceEndOffset,
+    }));
+}
+
+export type QualifyingSourceOccurrence = {
+  fingerprint: string | null;
+  eventType: LegalEventType;
+  date: Date | null;
+  civilDate: string | null;
+  parseStatus: ExtractedDate["parseStatus"];
+  raw: string;
+  context: string;
+  sourceStartOffset: number;
+  sourceEndOffset: number;
+  resolved: boolean;
+};
+
+export function isResolvedQualifyingDate(d: ExtractedDate): boolean {
+  return Boolean(d.date && d.civilDate && d.parseStatus === "valid" && mayStartLimitationClock(d.eventType));
+}
+
+function unresolvedOccurrenceFingerprint(d: ExtractedDate): string {
+  return sourceEventFingerprint({
+    sourceId: d.sourceId,
+    sourceStartOffset: d.sourceStartOffset,
+    sourceEndOffset: d.sourceEndOffset,
+    eventType: d.eventType,
+    civilDate: "",
+    raw: d.raw,
+    context: d.context,
+  });
+}
+
+/**
+ * Every qualifying limitation-start occurrence, including those whose
+ * civil date is missing, partial, ambiguous, or invalid.
+ */
+export function qualifyingSourceOccurrences(dates: ExtractedDate[]): QualifyingSourceOccurrence[] {
+  const occurrences: QualifyingSourceOccurrence[] = [];
   const seen = new Set<string>();
   for (const d of dates) {
-    if (!d.date || d.parseStatus !== "valid" || !d.civilDate) continue;
     if (!mayStartLimitationClock(d.eventType)) continue;
-    const fingerprint = fingerprintFromExtracted(d);
-    if (!fingerprint) continue;
-    if (seen.has(fingerprint)) continue;
-    seen.add(fingerprint);
-    candidates.push({
-      fingerprint,
+    const key = `${d.sourceId}:${d.sourceStartOffset}:${d.sourceEndOffset}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const resolved = isResolvedQualifyingDate(d);
+    occurrences.push({
+      fingerprint: resolved ? fingerprintFromExtracted(d) : unresolvedOccurrenceFingerprint(d),
       eventType: d.eventType,
       date: d.date,
       civilDate: d.civilDate,
+      parseStatus: d.parseStatus,
       raw: d.raw,
+      context: d.context,
       sourceStartOffset: d.sourceStartOffset,
       sourceEndOffset: d.sourceEndOffset,
+      resolved,
     });
   }
-  return candidates;
+  return occurrences;
 }
 
 function dueDatesMatch(stored: Date, expected: Date): boolean {
@@ -255,6 +305,16 @@ export function evaluateLimitationConfirmation(input: StoredDeadlineProvenance):
   }
 
   const extracted = input.extractedDates ?? analyzeNarrative(input.narrative).dates;
+  const occurrences = qualifyingSourceOccurrences(extracted);
+  const unresolved = occurrences.filter((o) => !o.resolved);
+  if (unresolved.length > 0) {
+    return refuse(
+      "ambiguous",
+      "Possible limitation date — another potentially relevant event date is unresolved. Confirmation is refused.",
+      "unresolved_qualifying_source"
+    );
+  }
+
   const candidates = qualifyingCandidatesFromDates(extracted);
 
   if (candidates.length === 0) {

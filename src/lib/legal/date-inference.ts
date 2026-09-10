@@ -1,4 +1,5 @@
 import type { ExtractedDate } from "@/lib/ai/heuristics";
+import { qualifyingSourceOccurrences } from "@/lib/legal/deadline-confirmation";
 import {
   classifyLegalEventType,
   mayStartLimitationClock,
@@ -113,6 +114,22 @@ export function inferLimitationStart(dates: ExtractedDate[]): DateInferenceResul
       status: "insufficient_data",
       warning_date: null,
       reason: "A date was mentioned without a complete year/month/day. It is not confirmed.",
+    });
+  }
+
+  const occurrences = qualifyingSourceOccurrences(dates);
+  const unresolvedQualifying = occurrences.filter((o) => !o.resolved);
+  const resolvedQualifying = occurrences.filter((o) => o.resolved && o.date);
+  if (unresolvedQualifying.length > 0 && resolvedQualifying.length > 0) {
+    const earliest = [...resolvedQualifying].sort(
+      (a, b) => (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0)
+    )[0];
+    return pack({
+      ...base,
+      status: "ambiguous",
+      warning_date: earliest?.date ?? null,
+      reason:
+        "Possible limitation date — another potentially relevant event date is unresolved.",
     });
   }
 
