@@ -5,7 +5,7 @@
 > and what's next. Update it as part of every ticket — a ticket is not
 > done until this file reflects reality.
 
-Last updated: 2026-09-10 (ticket: Step 2A-R4 cross-platform and deadline identity — see Ticket Log).
+Last updated: 2026-09-10 (ticket: Step 2A-R5 ambiguous date + dependency exception identity — see Ticket Log).
 
 ## 1. What UJRIS is
 
@@ -79,6 +79,17 @@ full record. Summary:
   High advisory is a dated development-only exception — see
   `docs/security/DEPENDENCY_EXCEPTION_REGISTER.md`.
   `docs/security/SECURITY_REGRESSION_MATRIX.md`.
+
+**Step 2A-R5 invariants (must hold; R4 source-span / civil-date /
+portability still hold):**
+
+- **UNRESOLVED QUALIFYING SOURCE:** a deadline may not be confirmed while
+  another potentially qualifying source occurrence exists with an
+  unresolved, partial, ambiguous, invalid, or missing date.
+- **EXCEPTION IDENTITY:** a dependency exception applies only to the
+  exact approved advisory identity and approved dependency context.
+  Unknown or different High advisories never inherit another advisory's
+  exception.
 
 **Step 2A-R4 invariants (must hold; R3 hearing-urgency still holds):**
 
@@ -199,6 +210,31 @@ should all pass cleanly before any ticket is considered done — see Ticket
 Log for the last verified run of each.
 
 ## 7. Ticket log
+
+### 2026-09-10 — Step 2A-R5 (Codex 2A-R4 FAIL — ambiguous date + exception identity)
+
+Branch: `step-2a-security-test-foundation` — **not merged**. Step 2B /
+Supabase **not started**. Forensic worker **not implemented**. R4
+source-span, civil-date, hearing-urgency, Windows/Linux CI, and two-cycle
+E2E work **not reopened**.
+
+Codex independently reproduced two remaining blockers: a complete
+dismissal date plus a second qualifying mention whose date is incomplete,
+invalid, or missing could still confirm with high confidence; an unknown
+High advisory on an approved Prisma CLI path could inherit
+`GHSA-ggr8-5vv4-36mx` via package/via-name matching.
+
+Remediation: preserve unresolved qualifying source occurrences; refuse
+confirmation (`unresolved_qualifying_source`); require exact advisory ID
+for dependency exceptions. EX-DEP-001 itself is unchanged.
+
+See `docs/implementation/STEP2A_R5_PLAN.md` and
+`docs/implementation/STEP2A_R5_IMPLEMENTATION_REPORT.md`.
+
+**Requires independent review:** YES — return this branch to Codex for a
+narrow check of these two remediations plus focused R4 regression.
+Do not merge. Do not start Supabase. Do not start Step 2B. Do not claim
+production-ready.
 
 ### 2026-09-10 — Step 2A-R4 (Codex 2A-R3 FAIL — cross-platform & deadline identity)
 
