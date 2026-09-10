@@ -53,6 +53,7 @@ export interface CaseAnalysisResult {
     ruleVersion: string;
     calculationInputs: string;
     sourceEventDate: Date | null;
+    sourceEventType: string;
     confirmationStatus: "unconfirmed";
   }[];
   urgency: Urgency;
@@ -80,18 +81,16 @@ export async function generateCaseAnalysis(input: {
   const analysis = analyzeNarrative(input.narrative);
   const issues = detectIssues(input.narrative);
   const dateInference = inferLimitationStart(analysis.dates);
-  const effectiveDate = dateInference.selectedDate;
-
   const situationLabel = SITUATION_LABELS[input.situation] ?? "your situation";
+  const warningDate = dateInference.warning_date;
+  const startType = dateInference.candidate_dates.find((c) => c.date && c.date.getTime() === warningDate?.getTime())?.event_type;
 
-  const hearingOnly =
-    analysis.dates.some((d) => d.valid && d.kind === "hearing") &&
-    !analysis.dates.some((d) => d.valid && d.kind !== "hearing");
   const derived = deriveLimitationDeadline({
-    effectiveDate: hearingOnly ? null : effectiveDate,
+    effectiveDate: warningDate,
     jurisdiction: "england-wales",
     inferenceStatus: dateInference.status,
-    sourceEventKind: hearingOnly ? "hearing" : analysis.dates.find((d) => d.valid && d.kind !== "hearing")?.kind,
+    sourceEventType: startType,
+    sourceEventKind: startType,
   });
 
   const deadlines: CaseAnalysisResult["deadlines"] = [];
@@ -109,6 +108,7 @@ export async function generateCaseAnalysis(input: {
       ruleVersion: derived.ruleVersion,
       calculationInputs: JSON.stringify(derived.calculationInputs),
       sourceEventDate: derived.sourceEventDate,
+      sourceEventType: derived.sourceEventType,
       confirmationStatus: "unconfirmed",
     });
   }

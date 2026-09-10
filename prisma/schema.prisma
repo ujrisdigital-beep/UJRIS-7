@@ -185,6 +185,7 @@ model Deadline {
   ruleVersion        String?
   calculationInputs  String?
   sourceEventDate    DateTime?
+  sourceEventType    String    @default("unknown")
   createdAt          DateTime  @default(now())
 
   @@index([caseId])

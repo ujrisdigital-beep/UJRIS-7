@@ -1,5 +1,6 @@
 import { addDays } from "date-fns";
-import { monthNameToNumber, parseNumericDateToken, parseStrictCivilDate } from "@/lib/legal/strict-date";
+import { monthNameToNumber, parseLegalDate, parseNumericDateToken, parseStrictCivilDate, type ParseStatus } from "@/lib/legal/strict-date";
+import { classifyLegalEventType, type LegalEventType } from "@/lib/legal/event-semantics";
 
 /**
  * Deterministic, explainable "signal extraction" engine.
@@ -77,7 +78,7 @@ const ISSUE_KEYWORDS: { id: string; label: string; keywords: string[]; authority
 
 const URGENCY_KEYWORDS = ["hearing", "tribunal", "deadline", "court date", "tomorrow", "this week", "urgent"];
 
-export type ExtractedDateKind = "unknown" | "hearing" | "event" | "deadline_mention";
+export type ExtractedDateKind = LegalEventType;
 
 export interface ExtractedDate {
   raw: string;
@@ -87,6 +88,8 @@ export interface ExtractedDate {
   missingYear: boolean;
   ambiguousNumeric: boolean;
   kind: ExtractedDateKind;
+  eventType: LegalEventType;
+  parseStatus: ParseStatus;
   provenance: "narrative_extraction";
 }
 
@@ -95,27 +98,25 @@ const MONTHS = [
   "july", "august", "september", "october", "november", "december",
 ];
 
-function classifyDateKind(context: string): ExtractedDateKind {
-  const lower = context.toLowerCase();
-  if (/\bhearing\b|\btribunal date\b|\bcourt date\b/.test(lower)) return "hearing";
-  if (/\bdeadline\b|\blimitation\b|\bfiling date\b/.test(lower)) return "deadline_mention";
-  return "event";
-}
-
 function extracted(
   raw: string,
   context: string,
   date: Date | null,
-  extra: { missingYear?: boolean; ambiguousNumeric?: boolean } = {}
+  extra: { missingYear?: boolean; ambiguousNumeric?: boolean; parseStatus?: ParseStatus } = {}
 ): ExtractedDate {
+  const eventType = classifyLegalEventType(context);
+  const parseStatus: ParseStatus = extra.parseStatus
+    ?? (extra.ambiguousNumeric ? "ambiguous" : extra.missingYear ? "partial" : date ? "valid" : "invalid");
   return {
     raw,
     date,
     context: context.trim(),
-    valid: date !== null,
+    valid: date !== null && parseStatus === "valid",
     missingYear: extra.missingYear === true,
     ambiguousNumeric: extra.ambiguousNumeric === true,
-    kind: classifyDateKind(context),
+    kind: eventType,
+    eventType,
+    parseStatus,
     provenance: "narrative_extraction",
   };
 }
@@ -126,6 +127,7 @@ export function extractDates(text: string): ExtractedDate[] {
   const sentences = text.split(/(?<=[.!?\n])\s+/);
 
   const numericPattern = /\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})\b/g;
+  const isoPattern = /\b(\d{4})-(\d{2})-(\d{2})(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?)?\b/g;
   const wordPattern = new RegExp(
     `\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(${MONTHS.join("|")})(?:\\s+(\\d{4}))?\\b`,
     "gi"
@@ -135,15 +137,21 @@ export function extractDates(text: string): ExtractedDate[] {
   for (const sentence of sentences) {
     let match: RegExpExecArray | null;
 
+    isoPattern.lastIndex = 0;
+    while ((match = isoPattern.exec(sentence))) {
+      const parsed = parseLegalDate(match[0], "narrative_iso");
+      results.push(extracted(match[0], sentence, parsed.normalized_value, { parseStatus: parsed.parse_status }));
+    }
+
     numericPattern.lastIndex = 0;
     while ((match = numericPattern.exec(sentence))) {
       const [raw, first, second, y] = match;
       const year = y.length === 2 ? 2000 + Number(y) : Number(y);
       const parsed = parseNumericDateToken(Number(first), Number(second), year);
-      if (!parsed.ok && parsed.reason === "ambiguous_numeric") {
-        results.push(extracted(raw, sentence, null, { ambiguousNumeric: true }));
+      if (parsed.parse_status === "ambiguous") {
+        results.push(extracted(raw, sentence, null, { ambiguousNumeric: true, parseStatus: "ambiguous" }));
       } else {
-        results.push(extracted(raw, sentence, parsed.ok ? parsed.date : null));
+        results.push(extracted(raw, sentence, parsed.normalized_value, { parseStatus: parsed.parse_status }));
       }
     }
 
@@ -160,7 +168,7 @@ export function extractDates(text: string): ExtractedDate[] {
         continue;
       }
       const parsed = parseStrictCivilDate(Number(y), month, Number(d));
-      results.push(extracted(raw, sentence, parsed.ok ? parsed.date : null));
+      results.push(extracted(raw, sentence, parsed.normalized_value, { parseStatus: parsed.parse_status }));
     }
 
     monthFirstPattern.lastIndex = 0;
@@ -176,7 +184,7 @@ export function extractDates(text: string): ExtractedDate[] {
         continue;
       }
       const parsed = parseStrictCivilDate(Number(y), month, Number(d));
-      results.push(extracted(raw, sentence, parsed.ok ? parsed.date : null));
+      results.push(extracted(raw, sentence, parsed.normalized_value, { parseStatus: parsed.parse_status }));
     }
   }
 

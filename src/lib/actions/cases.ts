@@ -10,6 +10,7 @@ import { entitlementsFor } from "@/lib/plans";
 import { appendAuditLog } from "@/lib/audit";
 import { analyzeNarrative, detectIssues } from "@/lib/ai/heuristics";
 import { refreshCaseIntelligenceForOwner } from "@/lib/cases/refresh-intelligence";
+import { evaluateLimitationConfirmation } from "@/lib/legal/deadline-confirmation";
 
 export interface CaseActionResult {
   ok: boolean;
@@ -90,6 +91,7 @@ export async function createCaseAction(
           ruleVersion: d.ruleVersion,
           calculationInputs: d.calculationInputs,
           sourceEventDate: d.sourceEventDate,
+          sourceEventType: d.sourceEventType,
           confirmationStatus: d.confirmationStatus,
           resolutionStatus: "unresolved",
         })),
@@ -209,12 +211,29 @@ export async function acknowledgeDeadlineAction(
 export async function confirmDeadlineAction(deadlineId: string): Promise<DeadlineMutationResult> {
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "unauthenticated" };
-  const deadline = await db.deadline.findUnique({ where: { id: deadlineId }, include: { case: true } });
+  const deadline = await db.deadline.findUnique({
+    where: { id: deadlineId },
+    include: { case: { include: { deadlines: true } } },
+  });
   if (!deadline) return { ok: false, error: "not_found" };
   if (deadline.case.userId !== user.id) return { ok: false, error: "forbidden" };
-  if (!deadline.dueDate || !deadline.ruleId || !deadline.sourceEventDate) {
+
+  const otherUnresolvedSourceDates = deadline.case.deadlines
+    .filter((d) => d.id !== deadline.id && d.resolutionStatus !== "resolved" && d.sourceEventDate)
+    .map((d) => d.sourceEventDate as Date);
+
+  const decision = evaluateLimitationConfirmation({
+    dueDate: deadline.dueDate,
+    ruleId: deadline.ruleId,
+    sourceEventDate: deadline.sourceEventDate,
+    sourceEventType: deadline.sourceEventType,
+    narrative: deadline.case.narrative,
+    otherUnresolvedSourceDates,
+  });
+  if (!decision.allowed) {
     return { ok: false, error: "invalid" };
   }
+
   await db.deadline.update({
     where: { id: deadlineId },
     data: {

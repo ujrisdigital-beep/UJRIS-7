@@ -1,8 +1,13 @@
 import { calculatePrimaryLimitationDate } from "@/lib/legal/deadlines";
 import type { DateInferenceStatus } from "@/lib/legal/date-inference";
+import {
+  LIMITATION_RULE_ID,
+  LIMITATION_RULE_VERSION,
+  mayStartLimitationClock,
+  type LegalEventType,
+} from "@/lib/legal/event-semantics";
 
-export const LIMITATION_RULE_ID = "ERA_EQA_3M_LESS_1D";
-export const LIMITATION_RULE_VERSION = "1.0.0";
+export { LIMITATION_RULE_ID, LIMITATION_RULE_VERSION };
 
 export type DeadlineSourceKind = "source_event" | "derived_deadline";
 
@@ -11,6 +16,7 @@ export interface DerivedDeadlineInput {
   jurisdiction: string | null | undefined;
   inferenceStatus: DateInferenceStatus;
   sourceEventKind?: string;
+  sourceEventType?: LegalEventType;
 }
 
 export interface DerivedDeadlineResult {
@@ -21,6 +27,7 @@ export interface DerivedDeadlineResult {
   ruleVersion: string;
   dueDate: Date | null;
   sourceEventDate: Date | null;
+  sourceEventType: LegalEventType | "unknown";
   calculationInputs: Record<string, unknown>;
   calculationResult: Record<string, unknown> | null;
   confirmationStatus: "unconfirmed";
@@ -36,11 +43,12 @@ const SUPPORTED_JURISDICTIONS = new Set(["england-wales"]);
  * Incomplete inputs fail safe (no due date).
  */
 export function deriveLimitationDeadline(input: DerivedDeadlineInput): DerivedDeadlineResult {
+  const eventType = (input.sourceEventType ?? input.sourceEventKind ?? "unknown") as LegalEventType | "unknown";
   const calculationInputs = {
     effectiveDate: input.effectiveDate?.toISOString() ?? null,
     jurisdiction: input.jurisdiction ?? null,
     inferenceStatus: input.inferenceStatus,
-    sourceEventKind: input.sourceEventKind ?? null,
+    sourceEventType: eventType,
     ruleId: LIMITATION_RULE_ID,
     ruleVersion: LIMITATION_RULE_VERSION,
   };
@@ -52,6 +60,7 @@ export function deriveLimitationDeadline(input: DerivedDeadlineInput): DerivedDe
     ruleVersion: LIMITATION_RULE_VERSION,
     dueDate: null,
     sourceEventDate: input.effectiveDate,
+    sourceEventType: eventType,
     calculationInputs,
     calculationResult: null,
     confirmationStatus: "unconfirmed" as const,
@@ -60,10 +69,10 @@ export function deriveLimitationDeadline(input: DerivedDeadlineInput): DerivedDe
     confidence: "low" as const,
   };
 
-  if (input.sourceEventKind === "hearing") {
+  if (!mayStartLimitationClock(eventType === "unknown" ? "unknown" : eventType)) {
     return {
       ...base,
-      reason: "A hearing date is not a limitation start and cannot produce a confirmed filing deadline.",
+      reason: `${eventType} cannot start an Employment Tribunal limitation clock under ${LIMITATION_RULE_ID}.`,
     };
   }
 
@@ -91,6 +100,7 @@ export function deriveLimitationDeadline(input: DerivedDeadlineInput): DerivedDe
     ruleVersion: LIMITATION_RULE_VERSION,
     dueDate: limitation.dueDate,
     sourceEventDate: input.effectiveDate,
+    sourceEventType: eventType,
     calculationInputs,
     calculationResult: {
       dueDate: limitation.dueDate.toISOString(),
