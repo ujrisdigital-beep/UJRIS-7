@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, vi } from "vitest";
-import { execSync } from "node:child_process";
 import { disconnectDb } from "@/lib/db";
 import { resetRateLimitStoreForTests, stopRateLimitCleanup } from "@/lib/rate-limit";
 import { resolveTestDatabaseUrl } from "./helpers/database-guard";
+import { migrateDeploy } from "../scripts/prisma-migrate.mjs";
 
 const cookieStore = new Map<string, string>();
 
@@ -43,16 +43,14 @@ export function getTestCookie(name: string): string | undefined {
 }
 
 process.env.AUTH_SECRET = process.env.AUTH_SECRET || "test-auth-secret-that-is-long-enough-32ch";
-process.env.DATABASE_URL = resolveTestDatabaseUrl(process.env);
+const testDatabaseUrl = resolveTestDatabaseUrl(process.env);
+process.env.DATABASE_URL = testDatabaseUrl;
 if (process.env.UJRIS_ALLOW_DEV_BILLING === undefined) {
   process.env.UJRIS_ALLOW_DEV_BILLING = "";
 }
 
 try {
-  execSync("npx prisma migrate deploy", {
-    env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL },
-    stdio: "pipe",
-  });
+  migrateDeploy(testDatabaseUrl);
 } catch (error) {
   console.error("Test database migration failed. Refusing to run tests against an unprepared database.");
   throw error;
