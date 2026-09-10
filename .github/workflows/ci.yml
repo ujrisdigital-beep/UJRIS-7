@@ -37,7 +37,11 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
       - name: E2E with managed server
+        timeout-minutes: 15
         run: npm run test:e2e
+      - name: Verify E2E port released
+        if: always()
+        run: node scripts/e2e-teardown.mjs
       - name: Production build
         run: npm run build
       - name: Surface npm audit (visibility; non-gating)

@@ -49,6 +49,7 @@ yarn-error.log*
 /prisma/test.db-journal
 /test.db
 /test.db-journal
+/.e2e-webserver.pid
 /data/
 /test-results/
 /playwright-report/
