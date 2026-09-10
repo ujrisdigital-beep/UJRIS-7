@@ -26,6 +26,8 @@ export async function refreshCaseIntelligenceForOwner(userId: string, caseId: st
     peopleIdentified: kase.people.length,
   });
 
+  // Acknowledgement is not resolution. Refresh must not confirm dates,
+  // clear acknowledged_at, or reduce urgency because a warning was seen.
   await db.case.update({ where: { id: caseId }, data: { readiness, urgency } });
   return { ok: true };
 }
