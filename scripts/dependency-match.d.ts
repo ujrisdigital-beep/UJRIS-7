@@ -16,6 +16,7 @@ export function exceptionMatchesRecord(
   },
   exception: {
     id: string;
+    advisoryId?: string;
     package: string;
     alsoAppliesTo?: string[];
     severity?: string;
@@ -44,6 +45,7 @@ export function parseAuditJson(
   meta?: { exitCode?: number | null; spawnError?: string; timedOut?: boolean }
 ): { ok: boolean; result: "ERROR" | "PARSED"; reason?: string; audit?: Record<string, unknown>; detail?: unknown; exitCode?: number };
 
+export function auditHasMalformedVulnerability(audit: { vulnerabilities?: Record<string, unknown> }): boolean;
 export function recordsFromAudit(audit: { vulnerabilities?: Record<string, unknown> }): Array<Record<string, unknown>>;
 
 export function evaluateAuditPolicy(

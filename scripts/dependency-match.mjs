@@ -96,7 +96,7 @@ function pathNodeMatches(node, declared) {
 }
 
 export function exceptionMatchesRecord(record, exception) {
-  const exId = normalizeGhsa(exception.id);
+  const exId = normalizeGhsa(exception.advisoryId || exception.id);
   if (!exId.startsWith("GHSA-")) {
     return { ok: false, reason: "advisory_mismatch" };
   }
@@ -107,15 +107,10 @@ export function exceptionMatchesRecord(record, exception) {
     return { ok: false, reason: "package_mismatch" };
   }
 
-  const recordGhsas = (record.ghsaIds ?? []).map(normalizeGhsa).filter(Boolean);
-  let advisoryOk = false;
-  if (recordGhsas.length > 0) {
-    advisoryOk = recordGhsas.length === 1 && recordGhsas[0] === exId;
-  } else if ((record.viaNames ?? []).some((name) => aliases.includes(name))) {
-    advisoryOk = true;
-  }
-
-  if (!advisoryOk) {
+  // Advisory identity is mandatory and exact. Package, path, via-name,
+  // parent package, and severity must never grant an exception alone.
+  const recordGhsas = [...new Set((record.ghsaIds ?? []).map(normalizeGhsa).filter(Boolean))];
+  if (recordGhsas.length !== 1 || recordGhsas[0] !== exId) {
     return { ok: false, reason: "advisory_mismatch" };
   }
 
@@ -161,15 +156,11 @@ export function evaluateExceptionGate(records, policy, today) {
       ...record,
       pathClass: record.pathClass ?? classifyRecordPaths(record.nodes ?? []),
     };
-    const ghsas = (annotated.ghsaIds ?? []).map(normalizeGhsa).filter(Boolean);
+    const ghsas = [...new Set((annotated.ghsaIds ?? []).map(normalizeGhsa).filter(Boolean))];
     if (ghsas.length === 0) {
-      const match = exceptions.find((ex) => exceptionMatchesRecord(annotated, ex).ok);
-      if (!match) {
-        failures.push(`Unreviewed ${annotated.severity} advisory in ${annotated.package} (pathClass=${annotated.pathClass})`);
-        continue;
-      }
-      const invalid = exceptionStillValid(match, annotated, today);
-      if (invalid) failures.push(invalid);
+      failures.push(
+        `Unreviewed ${annotated.severity} advisory in ${annotated.package} (missing advisory id; pathClass=${annotated.pathClass})`
+      );
       continue;
     }
     for (const ghsa of ghsas) {
@@ -234,22 +225,59 @@ export function parseAuditJson(raw, meta = {}) {
   return { ok: true, result: "PARSED", audit: parsed, exitCode: exitCode ?? 0 };
 }
 
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function ghsaFromViaItem(item) {
+  if (typeof item === "object" && item && item.url) {
+    const match = String(item.url).match(/GHSA-[a-z0-9-]+/i);
+    return match ? match[0].toUpperCase() : null;
+  }
+  return null;
+}
+
+/**
+ * Reconstruct advisory identity from the audit graph. String `via`
+ * entries copy GHSAs from the named sibling vulnerability. This is not
+ * package-only exception inheritance — the resolved ID must still match
+ * exactly later.
+ */
+function resolveGhsaIds(vuln, vulns, seen) {
+  const via = Array.isArray(vuln.via) ? vuln.via : [];
+  const direct = via.map(ghsaFromViaItem).filter(Boolean);
+  if (direct.length > 0) return [...new Set(direct)];
+  const inherited = [];
+  for (const item of via) {
+    if (typeof item !== "string") continue;
+    if (seen.has(item)) continue;
+    seen.add(item);
+    const parent = vulns[item];
+    if (!isPlainObject(parent)) continue;
+    inherited.push(...resolveGhsaIds(parent, vulns, seen));
+  }
+  return [...new Set(inherited)];
+}
+
+export function auditHasMalformedVulnerability(audit) {
+  const vulns = audit?.vulnerabilities;
+  if (!vulns || typeof vulns !== "object" || Array.isArray(vulns)) return true;
+  return Object.values(vulns).some((vuln) => !isPlainObject(vuln));
+}
+
 export function recordsFromAudit(audit) {
   const vulns = audit.vulnerabilities ?? {};
   const records = [];
   for (const [name, vuln] of Object.entries(vulns)) {
+    if (!isPlainObject(vuln)) {
+      const error = new Error("malformed_vulnerability");
+      error.code = "malformed_vulnerability";
+      throw error;
+    }
     const severity = vuln.severity;
     if (severity !== "high" && severity !== "critical") continue;
     const via = Array.isArray(vuln.via) ? vuln.via : [];
-    const ghsaIds = via
-      .map((item) => {
-        if (typeof item === "object" && item && item.url) {
-          const match = String(item.url).match(/GHSA-[a-z0-9-]+/i);
-          return match ? match[0].toUpperCase() : null;
-        }
-        return null;
-      })
-      .filter(Boolean);
+    const ghsaIds = resolveGhsaIds(vuln, vulns, new Set([name]));
     const viaNames = via.map((item) => (typeof item === "string" ? item : item?.name)).filter(Boolean);
     const nodes = vuln.nodes ?? [];
     records.push({
@@ -286,7 +314,30 @@ export function evaluateAuditPolicy(input, policy, today) {
       reason: parsed.reason,
     };
   }
-  const records = recordsFromAudit(parsed.audit);
+  if (auditHasMalformedVulnerability(parsed.audit)) {
+    return {
+      result: "ERROR",
+      exitCode: 2,
+      failures: ["AUDIT COULD NOT COMPLETE: malformed_vulnerability"],
+      records: [],
+      reason: "malformed_vulnerability",
+    };
+  }
+  let records;
+  try {
+    records = recordsFromAudit(parsed.audit);
+  } catch (error) {
+    if (error && error.code === "malformed_vulnerability") {
+      return {
+        result: "ERROR",
+        exitCode: 2,
+        failures: ["AUDIT COULD NOT COMPLETE: malformed_vulnerability"],
+        records: [],
+        reason: "malformed_vulnerability",
+      };
+    }
+    throw error;
+  }
   const failures = evaluateExceptionGate(records, policy, today);
   if (failures.length > 0) {
     return { result: "FAIL", exitCode: 1, failures, records };
