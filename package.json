@@ -15,7 +15,7 @@
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
     "test:security": "vitest run tests/security",
-    "test:e2e": "playwright test",
+    "test:e2e": "node scripts/e2e-run.mjs",
     "test:watch": "vitest",
     "test:audit": "npm audit --audit-level=high"
   },
@@ -41,6 +41,10 @@
     "tw-animate-css": "^1.4.0",
     "uuid": "^14.0.2",
     "zod": "^4.5.4"
+  },
+  "engines": {
+    "node": ">=20 <23",
+    "npm": ">=10"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

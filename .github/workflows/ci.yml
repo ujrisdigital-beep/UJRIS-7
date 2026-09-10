@@ -36,10 +36,15 @@ jobs:
         run: npm run test:integration
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
-      - name: E2E with managed server
+      - name: E2E with managed server (run 1)
         timeout-minutes: 15
         run: npm run test:e2e
-      - name: Verify E2E port released
+      - name: Verify E2E port released after run 1
+        run: node scripts/e2e-teardown.mjs
+      - name: E2E with managed server (run 2)
+        timeout-minutes: 15
+        run: npm run test:e2e
+      - name: Verify E2E port released after run 2
         if: always()
         run: node scripts/e2e-teardown.mjs
       - name: Production build
