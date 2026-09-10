@@ -4,16 +4,16 @@
  * Storage: process-local Map. Keys are `action:` + SHA-256 prefix of the
  * normalised email — never the raw email, password, token, or file bytes.
  *
- * Bounds:
- * - Inactive buckets expire after AUTH_RATE_WINDOW_MS.
- * - Periodic cleanup (unref'd so it does not keep the process alive).
+ * Bounds (lazy, no global timer):
+ * - Inactive buckets expire after AUTH_RATE_WINDOW_MS and are pruned on use.
  * - AUTH_RATE_MAX_BUCKETS cap with deterministic eviction:
  *   expired first, then least-recently-used buckets that are *not*
  *   currently limited. Currently-limited buckets are not evicted to
  *   create room for a new key (prevents a simple overflow bypass).
  *
- * Not production-grade. Not distributed. Replace before multi-instance
- * production (Supabase / Redis / WAF). Fail-open if the store throws.
+ * Not production-grade. Not distributed. Not serverless-safe as a singleton
+ * Map. Replace before multi-instance production (Supabase Auth / Redis / WAF).
+ * Fail-open if the store throws.
  */
 
 import { createHash } from "node:crypto";
@@ -24,7 +24,6 @@ export function authRateMaxBuckets(): number {
   const n = Number(process.env.UJRIS_RATE_LIMIT_MAX_BUCKETS);
   return Number.isFinite(n) && n >= 4 ? n : 4096;
 }
-export const AUTH_RATE_CLEANUP_MS = 1_000;
 
 const GENERIC_AUTH_ERROR = "Unable to sign you in.";
 export const GENERIC_ACCOUNT_ACTION_MESSAGE =
@@ -42,7 +41,6 @@ const buckets = new Map<string, Bucket>();
 
 let evictions = 0;
 let expiredRemovals = 0;
-let cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
 function hashIdentity(email: string): string {
   return createHash("sha256").update(email.trim().toLowerCase()).digest("hex").slice(0, 24);
@@ -74,11 +72,9 @@ export function resetRateLimitStoreForTests(): void {
   expiredRemovals = 0;
 }
 
+/** @deprecated No global timer is used. Kept so existing teardown calls remain safe. */
 export function stopRateLimitCleanup(): void {
-  if (cleanupTimer) {
-    clearInterval(cleanupTimer);
-    cleanupTimer = null;
-  }
+  // Lazy TTL pruning only — nothing to stop.
 }
 
 export function sweepRateLimitBuckets(now = Date.now()): number {
@@ -120,14 +116,6 @@ function evictToAdmitNew(now: number): boolean {
   return true;
 }
 
-function ensureCleanupTimer(): void {
-  if (cleanupTimer) return;
-  cleanupTimer = setInterval(() => {
-    sweepRateLimitBuckets();
-  }, AUTH_RATE_CLEANUP_MS);
-  cleanupTimer.unref();
-}
-
 export type RateLimitDecision =
   | { allowed: true; remaining: number }
   | { allowed: false; retryAfterSec: number; message: string };
@@ -138,6 +126,7 @@ function deny(retryAfterSec: number): RateLimitDecision {
 
 export function inspectAuthRateLimit(key: string, now = Date.now()): RateLimitDecision {
   try {
+    sweepRateLimitBuckets(now);
     const existing = buckets.get(key);
     if (!existing || existing.resetAt <= now) {
       return { allowed: true, remaining: AUTH_RATE_MAX_ATTEMPTS };
@@ -153,7 +142,7 @@ export function inspectAuthRateLimit(key: string, now = Date.now()): RateLimitDe
 
 export function consumeAuthRateLimit(key: string, now = Date.now()): RateLimitDecision {
   try {
-    ensureCleanupTimer();
+    sweepRateLimitBuckets(now);
     const existing = buckets.get(key);
     if (existing && existing.resetAt > now) {
       existing.count += 1;
