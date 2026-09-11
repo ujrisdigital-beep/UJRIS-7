@@ -5,7 +5,7 @@
 > and what's next. Update it as part of every ticket — a ticket is not
 > done until this file reflects reality.
 
-Last updated: 2026-09-11 (ticket: Step 2A-R8 procedural-reference coverage + exact GHSA token identity — see Ticket Log).
+Last updated: 2026-09-11 (ticket: Step 2A-R9 clause-boundary date ownership — see Ticket Log).
 
 ## 1. What UJRIS is
 
@@ -79,6 +79,14 @@ full record. Summary:
   High advisory is a dated development-only exception — see
   `docs/security/DEPENDENCY_EXCEPTION_REGISTER.md`.
   `docs/security/SECURITY_REGRESSION_MATRIX.md`.
+
+**Step 2A-R9 invariants (must hold; R8 procedural-reference / exact-token still hold):**
+
+- **CLAUSE-BOUNDARY DATE OWNERSHIP:** a date may support limitation
+  confirmation only when it is independently owned by the qualifying
+  event occurrence. A date belonging to an outer procedural assertion
+  must not transfer to a qualifying event mentioned inside that
+  procedural assertion, regardless of lexical proximity.
 
 **Step 2A-R8 invariants (must hold; R7 clause-ownership / scalar-ID still hold):**
 
@@ -244,6 +252,37 @@ should all pass cleanly before any ticket is considered done — see Ticket
 Log for the last verified run of each.
 
 ## 7. Ticket log
+
+### 2026-09-11 — Step 2A-R9 (Codex 2A-R8 FAIL — clause-boundary date ownership)
+
+Branch: `step-2a-security-test-foundation` — **not merged**. Step 2B /
+Supabase **not started**. Forensic worker **not implemented**. Named R8
+GHSA URL / scalar advisory / EX-DEP-001 work **not reopened**. Named R8
+procedural-reference phrases remain green.
+
+Codex independently reproduced one remaining High: two clause structures
+still converted a hearing date into a confirmed/high-confidence dismissal
+limitation.
+
+`CURSOR_BLOCKERS.md` was not mounted. Fixtures recovered against R8 HEAD
+`772cb9b`:
+
+1. `The hearing, about my dismissal, is on 20 April 2026.`
+2. `The tribunal hearing, which concerns my dismissal, is on 20 April 2026.`
+
+Remediation: punctuation-tolerant topic-scope plus event-assertion date
+ownership (`eventAssertionOwner`) so outer procedural predicates keep
+their dates, while an embedded dismissal may still own its own explicit
+date. Confirmation refuses mismatched `dateOwnerEventType`. EX-DEP-001
+itself is unchanged.
+
+See `docs/implementation/STEP2A_R9_PLAN.md` and
+`docs/implementation/STEP2A_R9_IMPLEMENTATION_REPORT.md`.
+
+**Requires independent review:** YES — return this branch to Codex for a
+narrow check of the two clause fixtures, structural variants, and focused
+regression. Do not reopen GHSA parsing. Do not merge. Do not start
+Supabase. Do not start Step 2B. Do not claim production-ready.
 
 ### 2026-09-11 — Step 2A-R8 (Codex 2A-R7 FAIL — procedural reference + GHSA URL token)
 

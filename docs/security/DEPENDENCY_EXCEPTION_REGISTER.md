@@ -35,6 +35,10 @@ Reviewed: 2026-09-10
 Next review / `review_by`: 2026-12-31  
 Owner: UJRIS engineering — Step 2A security track
 
+Step 2A-R9: **no policy change**. Exception identity, advisory-set, scalar
+ID, and exact-token matching are unchanged. GHSA URL parsing was not
+reopened.
+
 ## Exception EX-DEP-001
 
 | Field | Value |
