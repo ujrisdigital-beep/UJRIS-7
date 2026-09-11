@@ -5,7 +5,7 @@
 > and what's next. Update it as part of every ticket — a ticket is not
 > done until this file reflects reality.
 
-Last updated: 2026-09-11 (ticket: Step 2A-R6 event/date ownership + advisory-set evaluation — see Ticket Log).
+Last updated: 2026-09-11 (ticket: Step 2A-R7 clause-level event ownership + advisory ID type safety — see Ticket Log).
 
 ## 1. What UJRIS is
 
@@ -79,6 +79,17 @@ full record. Summary:
   High advisory is a dated development-only exception — see
   `docs/security/DEPENDENCY_EXCEPTION_REGISTER.md`.
   `docs/security/SECURITY_REGRESSION_MATRIX.md`.
+
+**Step 2A-R7 invariants (must hold; R6 ownership / advisory-set still hold):**
+
+- **CLAUSE-LEVEL EVENT OWNERSHIP:** a qualifying event referenced as the
+  topic, object or subject of a dated procedural event does not inherit
+  that procedural event's date. Only a qualifying event occurrence with
+  its own deterministically owned date can support confirmation.
+- **ADVISORY ID TYPE:** dependency exception matching accepts only
+  validated scalar advisory identifiers. Arrays, objects, nested values
+  or other malformed identities never inherit an exception and must fail
+  closed.
 
 **Step 2A-R6 invariants (must hold; R5 unresolved-source / exception
 identity still hold):**
@@ -222,6 +233,31 @@ should all pass cleanly before any ticket is considered done — see Ticket
 Log for the last verified run of each.
 
 ## 7. Ticket log
+
+### 2026-09-11 — Step 2A-R7 (Codex 2A-R6 FAIL — clause ownership + advisory type)
+
+Branch: `step-2a-security-test-foundation` — **not merged**. Step 2B /
+Supabase **not started**. Forensic worker **not implemented**. R4–R6
+source-span, unresolved-qualifying-source, civil-date, hearing-urgency,
+advisory-set, Windows/Linux CI, and two-cycle E2E work **not reopened**
+except as required to fix the two reproduced blockers.
+
+Codex independently reproduced: “The hearing for my dismissal is on 20
+April 2026” confirming a high-confidence dismissal limitation; a
+malformed array-valued advisory ID inheriting GHSA-ggr8-5vv4-36mx.
+
+Remediation: occurrence vs reference mention roles; tight topic-preposition
+ownership; confirmation refuses referenced qualifying words;
+`canonicalGhsa` scalar-only matching with no `String()` coercion.
+EX-DEP-001 itself is unchanged.
+
+See `docs/implementation/STEP2A_R7_PLAN.md` and
+`docs/implementation/STEP2A_R7_IMPLEMENTATION_REPORT.md`.
+
+**Requires independent review:** YES — return this branch to Codex for a
+narrow check of the two exact repros plus focused regression. Do not
+merge. Do not start Supabase. Do not start Step 2B. Do not claim
+production-ready.
 
 ### 2026-09-11 — Step 2A-R6 (Codex 2A-R5 FAIL — date ownership + advisory set)
 

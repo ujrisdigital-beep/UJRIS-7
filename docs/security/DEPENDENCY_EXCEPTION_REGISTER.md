@@ -17,6 +17,14 @@ One approved GHSA never PASSes a record that also contains unknown,
 malformed, missing-ID, or unapproved High/Critical causes. Empty High
 `via` lists and malformed `via` values fail closed.
 
+**ADVISORY ID TYPE INVARIANT:** dependency exception matching accepts only
+validated scalar advisory identifiers matching
+`^GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$` after documented trim and
+case-normalisation. Arrays, objects, numbers, booleans, null, nested
+values, comma-combined strings, and other malformed identities never
+inherit an exception. `String()` / template coercion is not used on
+advisory identity.
+
 Reviewed: 2026-09-10  
 Next review / `review_by`: 2026-12-31  
 Owner: UJRIS engineering — Step 2A security track
