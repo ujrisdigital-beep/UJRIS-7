@@ -6,6 +6,7 @@ import {
   evaluateAuditPolicy,
   exceptionMatchesRecord,
   evaluateExceptionGate,
+  extractAdvisoryGhsa,
   normalizeGhsa,
   parseAuditJson,
   recordsFromAudit,
@@ -756,3 +757,112 @@ describe("R7 advisory ID type safety", () => {
     expect(matchWith([arrayId], { viaNames: ["deepmerge-ts"] }).ok).toBe(false);
   });
 });
+
+describe("R8 exact GHSA URL/token identity", () => {
+  const approvedId = "GHSA-ggr8-5vv4-36mx";
+  const approvedUpper = "GHSA-GGR8-5VV4-36MX";
+  const approvedUrl = "https://github.com/advisories/GHSA-ggr8-5vv4-36mx";
+  const approvedVia = { url: approvedUrl, name: "deepmerge-ts", severity: "high" };
+  const approvedNodes = ["node_modules/deepmerge-ts"];
+
+  function policyForUrl(url: string) {
+    return evaluateAuditPolicy(
+      {
+        stdout: JSON.stringify({
+          vulnerabilities: {
+            "deepmerge-ts": { severity: "high", via: [{ url, name: "deepmerge-ts" }], nodes: approvedNodes },
+          },
+        }),
+        exitCode: 1,
+      },
+      policy,
+      "2026-09-10"
+    );
+  }
+
+  it("exact GitHub advisory URL extracts the canonical GHSA and may PASS in approved context", () => {
+    expect(extractAdvisoryGhsa(approvedUrl)).toEqual({ ghsa: approvedUpper, malformed: false });
+    expect(extractAdvisoryGhsa(approvedId)).toEqual({ ghsa: approvedUpper, malformed: false });
+    expect(policyForUrl(approvedUrl).result).toBe("PASS");
+  });
+
+  it("GHSA prefix plus extra suffix is INVALID and does not inherit EX-DEP-001", () => {
+    const extra = "https://github.com/advisories/GHSA-ggr8-5vv4-36mx-extra";
+    const glued = "https://github.com/advisories/GHSA-ggr8-5vv4-36mxXYZ";
+    expect(extractAdvisoryGhsa(extra)).toEqual({ ghsa: null, malformed: true });
+    expect(extractAdvisoryGhsa(glued)).toEqual({ ghsa: null, malformed: true });
+    expect(policyForUrl(extra).result).not.toBe("PASS");
+    expect(policyForUrl(glued).result).not.toBe("PASS");
+  });
+
+  it("nested path after an otherwise exact GHSA segment is INVALID", () => {
+    const nested = "https://github.com/advisories/GHSA-ggr8-5vv4-36mx/extra";
+    expect(extractAdvisoryGhsa(nested)).toEqual({ ghsa: null, malformed: true });
+    expect(policyForUrl(nested).result).not.toBe("PASS");
+  });
+
+  it("non-github host with a GHSA-looking path does not inherit the exception", () => {
+    const hostile = "https://example.test/GHSA-ggr8-5vv4-36mx-malformed";
+    expect(extractAdvisoryGhsa(hostile)).toEqual({ ghsa: null, malformed: true });
+    expect(policyForUrl(hostile).result).not.toBe("PASS");
+  });
+
+  it("encoded malformed suffix is INVALID after decoding", () => {
+    const encoded = "https://github.com/advisories/GHSA-ggr8-5vv4-36mx%2Dextra";
+    expect(extractAdvisoryGhsa(encoded)).toEqual({ ghsa: null, malformed: true });
+    expect(policyForUrl(encoded).result).not.toBe("PASS");
+  });
+
+  it("query and fragment malformed identities are INVALID", () => {
+    const query = "https://github.com/advisories/GHSA-ggr8-5vv4-36mx?id=GHSA-ggr8-5vv4-36mxBAD";
+    const fragment = "https://github.com/advisories/GHSA-ggr8-5vv4-36mx#GHSA-ggr8-5vv4-36mxBAD";
+    const queryOnly = "https://example.test/?id=GHSA-ggr8-5vv4-36mxBAD";
+    expect(extractAdvisoryGhsa(query)).toEqual({ ghsa: null, malformed: true });
+    expect(extractAdvisoryGhsa(fragment)).toEqual({ ghsa: null, malformed: true });
+    expect(extractAdvisoryGhsa(queryOnly)).toEqual({ ghsa: null, malformed: true });
+    expect(policyForUrl(query).result).not.toBe("PASS");
+  });
+
+  it("adjacent malformed tokens are not truncated to the approved GHSA", () => {
+    const tokens = [
+      "GHSA-ggr8-5vv4-36mxA",
+      "AGHSA-ggr8-5vv4-36mx",
+      "GHSA-ggr8-5vv4-36mx-extra",
+      "GHSA-ggr8-5vv4-36mx_",
+      "GHSA-ggr8-5vv4-36mx.other",
+    ];
+    for (const token of tokens) {
+      expect(extractAdvisoryGhsa(token)).toEqual({ ghsa: null, malformed: true });
+      expect(canonicalGhsa(token)).toBeNull();
+    }
+  });
+
+  it("mutation: first GHSA-looking substring would inherit EX-DEP-001 from a suffix", () => {
+    const extra = "https://github.com/advisories/GHSA-ggr8-5vv4-36mx-extra";
+    const substring = extra.match(/GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}/i)?.[0];
+    expect(substring?.toUpperCase()).toBe(approvedUpper);
+    expect(extractAdvisoryGhsa(extra).ghsa).toBeNull();
+    expect(extractAdvisoryGhsa(extra).malformed).toBe(true);
+    expect(policyForUrl(extra).result).not.toBe("PASS");
+    expect(policyForUrl("https://github.com/advisories/GHSA-ggr8-5vv4-36mxXYZ").result).not.toBe("PASS");
+  });
+
+  it("preserves R7 non-scalar safety and R6 approved-only PASS", () => {
+    expect(canonicalGhsa([approvedId])).toBeNull();
+    expect(extractAdvisoryGhsa(["GHSA-ggr8-5vv4-36mx"] as unknown as string).malformed).toBe(true);
+    const outcome = evaluateAuditPolicy(
+      {
+        stdout: JSON.stringify({
+          vulnerabilities: {
+            "deepmerge-ts": { severity: "high", via: [approvedVia], nodes: approvedNodes },
+          },
+        }),
+        exitCode: 1,
+      },
+      policy,
+      "2026-09-10"
+    );
+    expect(outcome.result).toBe("PASS");
+  });
+});
+
