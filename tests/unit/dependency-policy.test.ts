@@ -549,7 +549,7 @@ describe("R6 advisory set evaluation", () => {
       },
     });
     expect(outcome.result).toBe("PASS");
-    expect(outcome.records.every((row) => row.severity !== "moderate")).toBe(true);
+    expect(outcome.records.every((row) => (row as { severity?: string }).severity !== "moderate")).toBe(true);
   });
 
   it("I: approved GHSA + Critical unknown advisory fails", () => {
