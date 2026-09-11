@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  canonicalGhsa,
   classifyDependencyPath,
   classifyRecordPaths,
   evaluateAuditPolicy,
   exceptionMatchesRecord,
   evaluateExceptionGate,
+  normalizeGhsa,
   parseAuditJson,
   recordsFromAudit,
 } from "../../scripts/dependency-match.mjs";
@@ -617,5 +619,140 @@ describe("R6 advisory set evaluation", () => {
       },
     });
     expect(mixed.result).not.toBe("PASS");
+  });
+});
+
+describe("R7 advisory ID type safety", () => {
+  const approvedId = "GHSA-ggr8-5vv4-36mx";
+  const approvedUpper = "GHSA-GGR8-5VV4-36MX";
+
+  function matchWith(ghsaIds: unknown, extra: Record<string, unknown> = {}) {
+    return exceptionMatchesRecord(
+      {
+        package: "deepmerge-ts",
+        severity: "high",
+        ghsaIds,
+        viaNames: [],
+        nodes: ["node_modules/deepmerge-ts"],
+        ...extra,
+      },
+      exception
+    );
+  }
+
+  function gateWith(ghsaIds: unknown, extra: Record<string, unknown> = {}) {
+    return evaluateExceptionGate(
+      [
+        {
+          package: "deepmerge-ts",
+          severity: "high",
+          ghsaIds,
+          viaNames: [],
+          nodes: ["node_modules/deepmerge-ts"],
+          ...extra,
+        },
+      ],
+      policy,
+      "2026-09-10"
+    );
+  }
+
+  it("A: scalar approved GHSA in the approved context is a temporary PASS", () => {
+    expect(canonicalGhsa(approvedId)).toBe(approvedUpper);
+    expect(matchWith([approvedId]).ok).toBe(true);
+    expect(gateWith([approvedId])).toEqual([]);
+  });
+
+  it("B: array-valued advisory ID cannot inherit the approved exception", () => {
+    const wrapped = [approvedId];
+    expect(canonicalGhsa(wrapped)).toBeNull();
+    expect(matchWith([wrapped]).ok).toBe(false);
+    expect(matchWith([wrapped]).reason).toBe("malformed_advisory_id");
+    expect(gateWith([wrapped]).some((f) => /Malformed advisory identity/i.test(f))).toBe(true);
+  });
+
+  it("C: multi-id array including the approved GHSA still FAIL/ERROR", () => {
+    const ids = [approvedId, "GHSA-unknown-high"];
+    expect(canonicalGhsa(ids)).toBeNull();
+    expect(matchWith([ids]).ok).toBe(false);
+    expect(gateWith([ids]).length).toBeGreaterThan(0);
+  });
+
+  it("D: object-valued identity is not exception-matched", () => {
+    const asObject = { id: approvedId };
+    expect(canonicalGhsa(asObject)).toBeNull();
+    expect(matchWith([asObject]).ok).toBe(false);
+    expect(matchWith(asObject).ok).toBe(false);
+    expect(gateWith([asObject]).length).toBeGreaterThan(0);
+  });
+
+  it("E: numeric advisory ID FAIL/ERROR", () => {
+    expect(canonicalGhsa(123)).toBeNull();
+    expect(matchWith([123]).ok).toBe(false);
+    expect(gateWith([123]).length).toBeGreaterThan(0);
+  });
+
+  it("F: null advisory ID FAIL/ERROR", () => {
+    expect(canonicalGhsa(null)).toBeNull();
+    expect(matchWith([null]).ok).toBe(false);
+    expect(gateWith([null]).length).toBeGreaterThan(0);
+    expect(matchWith(null).ok).toBe(false);
+  });
+
+  it("G: surrounding whitespace is trimmed then validated", () => {
+    expect(canonicalGhsa(` ${approvedId} `)).toBe(approvedUpper);
+    expect(matchWith([` ${approvedId} `]).ok).toBe(true);
+    expect(gateWith([` ${approvedId} `])).toEqual([]);
+  });
+
+  it("H: combined comma-separated scalar is malformed", () => {
+    const combined = `${approvedId},GHSA-unknown-high`;
+    expect(canonicalGhsa(combined)).toBeNull();
+    expect(matchWith([combined]).ok).toBe(false);
+    expect(gateWith([combined]).length).toBeGreaterThan(0);
+  });
+
+  it("I: lowercase GHSA is case-normalised then matched", () => {
+    expect(canonicalGhsa("ghsa-ggr8-5vv4-36mx")).toBe(approvedUpper);
+    expect(matchWith(["ghsa-ggr8-5vv4-36mx"]).ok).toBe(true);
+  });
+
+  it("J: array-valued ID with approved viaNames/path still FAIL/ERROR", () => {
+    const result = matchWith([ [approvedId] ], { viaNames: ["deepmerge-ts", "prisma"] });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("malformed_advisory_id");
+    expect(gateWith([ [approvedId] ], { viaNames: ["deepmerge-ts"] }).length).toBeGreaterThan(0);
+  });
+
+  it("nested array, empty array, array-with-null, and array-valued object id fail closed", () => {
+    expect(matchWith([[ [approvedId] ]]).ok).toBe(false);
+    expect(matchWith([]).ok).toBe(false);
+    expect(matchWith([approvedId, null]).ok).toBe(false);
+    expect(matchWith([{ id: [approvedId] }]).ok).toBe(false);
+    expect(gateWith([[ [approvedId] ]]).length).toBeGreaterThan(0);
+    expect(gateWith([]).length).toBeGreaterThan(0);
+    expect(gateWith([approvedId, null]).length).toBeGreaterThan(0);
+    expect(gateWith([{ id: [approvedId] }]).length).toBeGreaterThan(0);
+  });
+
+  it("prototype/toString tricks never coerce into the approved GHSA", () => {
+    const tricky = { toString() { return approvedId; } };
+    expect(String(tricky)).toBe(approvedId);
+    expect(canonicalGhsa(tricky)).toBeNull();
+    expect(matchWith([tricky]).ok).toBe(false);
+    expect(normalizeGhsa(tricky)).toBe("");
+  });
+
+  it("mutation: String(advisoryId) === approvedId must not be sufficient", () => {
+    const arrayId = [approvedId];
+    expect(String(arrayId).toUpperCase()).toBe(approvedUpper);
+    expect(canonicalGhsa(arrayId)).toBeNull();
+    expect(normalizeGhsa(arrayId)).toBe("");
+    expect(matchWith([arrayId]).ok).toBe(false);
+    expect(matchWith([arrayId]).reason).toBe("malformed_advisory_id");
+    const multi = [approvedId, "GHSA-unknown-high"];
+    expect(canonicalGhsa(multi)).toBeNull();
+    expect(matchWith([multi]).ok).toBe(false);
+    expect(matchWith([arrayId], { viaNames: ["deepmerge-ts"] }).ok).toBe(false);
   });
 });
