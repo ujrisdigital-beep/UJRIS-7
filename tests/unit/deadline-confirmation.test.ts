@@ -343,4 +343,34 @@ describe("deadline confirmation source binding", () => {
       expect(decision.allowed).toBe(true);
     }
   });
+
+  it("tamper: dismissal occurrence whose date owner is a hearing is refused", () => {
+    const narrative = "The hearing, about my dismissal, is on 20 April 2026.";
+    const dates = extractDates(narrative);
+    const april = dates.find((d) => d.civilDate === "2026-04-20");
+    expect(april?.dateOwnerEventType).toBe("hearing");
+    const tampered = {
+      ...april!,
+      eventType: "dismissal" as const,
+      kind: "dismissal" as const,
+      mentionRole: "occurrence" as const,
+      dateOwnerEventType: "hearing" as const,
+    };
+    const apr20 = new Date(Date.UTC(2026, 3, 20));
+    const decision = confirm({
+      sourceEventDate: apr20,
+      sourceEventType: "dismissal",
+      sourceEventId: fingerprintFromExtracted(tampered),
+      sourceRawDate: "20 April 2026",
+      dueDate: expectedDueDateFromSource(apr20),
+      narrative,
+      extractedDates: [tampered],
+    });
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(["date_ownership_unresolved", "source_event_not_found", "source_type_not_qualifying"]).toContain(
+        decision.code
+      );
+    }
+  });
 });
