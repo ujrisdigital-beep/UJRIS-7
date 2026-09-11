@@ -440,3 +440,182 @@ describe("R5 exception identity matrix", () => {
     expect(outcome.result).toBe("PASS");
   });
 });
+
+describe("R6 advisory set evaluation", () => {
+  const approvedVia = {
+    url: "https://github.com/advisories/GHSA-ggr8-5vv4-36mx",
+    name: "deepmerge-ts",
+    severity: "high",
+  };
+  const approvedNodes = ["node_modules/deepmerge-ts"];
+
+  function policyInput(vulnerabilities: Record<string, unknown>) {
+    return evaluateAuditPolicy(
+      { stdout: JSON.stringify({ vulnerabilities }), exitCode: 1 },
+      policy,
+      "2026-09-10"
+    );
+  }
+
+  it("A: approved GHSA only on unexpired dev_tooling is temporary PASS", () => {
+    const outcome = policyInput({
+      "deepmerge-ts": { severity: "high", via: [approvedVia], nodes: approvedNodes },
+    });
+    expect(outcome.result).toBe("PASS");
+  });
+
+  it("B: unknown High only on the approved path fails", () => {
+    const outcome = policyInput({
+      "deepmerge-ts": {
+        severity: "high",
+        via: [{ url: "https://github.com/advisories/GHSA-unkn-own0-advs", name: "deepmerge-ts" }],
+        nodes: approvedNodes,
+      },
+    });
+    expect(outcome.result).toBe("FAIL");
+  });
+
+  it("C: approved GHSA + unknown High fails (mutation: any-approved-GHSA would pass)", () => {
+    const outcome = policyInput({
+      "deepmerge-ts": {
+        severity: "high",
+        via: [
+          approvedVia,
+          { url: "https://github.com/advisories/GHSA-unkn-own0-advs", name: "deepmerge-ts", severity: "high" },
+        ],
+        nodes: approvedNodes,
+      },
+    });
+    expect(outcome.result).toBe("FAIL");
+    expect(outcome.exitCode).toBe(1);
+  });
+
+  it("D: approved GHSA + different known High fails", () => {
+    const outcome = policyInput({
+      "deepmerge-ts": {
+        severity: "high",
+        via: [
+          approvedVia,
+          { url: "https://github.com/advisories/GHSA-aaaa-bbbb-cccc", name: "deepmerge-ts" },
+        ],
+        nodes: approvedNodes,
+      },
+    });
+    expect(outcome.result).toBe("FAIL");
+  });
+
+  it("E: approved GHSA + malformed High object is ERROR/FAIL", () => {
+    const outcome = policyInput({
+      "deepmerge-ts": {
+        severity: "high",
+        via: [approvedVia, {}],
+        nodes: approvedNodes,
+      },
+    });
+    expect(outcome.result).not.toBe("PASS");
+    expect(["FAIL", "ERROR"]).toContain(outcome.result);
+  });
+
+  it("F: approved GHSA + missing-ID High fails", () => {
+    const outcome = policyInput({
+      "deepmerge-ts": {
+        severity: "high",
+        via: [approvedVia, { name: "mystery-lib", severity: "high", title: "unidentified high" }],
+        nodes: approvedNodes,
+      },
+    });
+    expect(outcome.result).toBe("FAIL");
+    expect(outcome.failures.some((f) => /unidentified/i.test(f))).toBe(true);
+  });
+
+  it("G: two copies of the approved GHSA may PASS", () => {
+    const outcome = policyInput({
+      "deepmerge-ts": {
+        severity: "high",
+        via: [approvedVia, { ...approvedVia }],
+        nodes: approvedNodes,
+      },
+    });
+    expect(outcome.result).toBe("PASS");
+  });
+
+  it("H: approved GHSA + Moderate unrelated advisory does not hide the High evaluation", () => {
+    const outcome = policyInput({
+      "deepmerge-ts": { severity: "high", via: [approvedVia], nodes: approvedNodes },
+      leftpad: {
+        severity: "moderate",
+        via: [{ url: "https://github.com/advisories/GHSA-mmmm-oooo-dddd", name: "leftpad" }],
+        nodes: ["node_modules/leftpad"],
+      },
+    });
+    expect(outcome.result).toBe("PASS");
+    expect(outcome.records.every((row) => row.severity !== "moderate")).toBe(true);
+  });
+
+  it("I: approved GHSA + Critical unknown advisory fails", () => {
+    const outcome = policyInput({
+      "deepmerge-ts": {
+        severity: "critical",
+        via: [
+          approvedVia,
+          { url: "https://github.com/advisories/GHSA-crit-ical-xxxx", name: "deepmerge-ts", severity: "critical" },
+        ],
+        nodes: approvedNodes,
+      },
+    });
+    expect(outcome.result).toBe("FAIL");
+  });
+
+  it("J: approved GHSA reachable through production_runtime fails", () => {
+    const outcome = policyInput({
+      "deepmerge-ts": {
+        severity: "high",
+        via: [approvedVia],
+        nodes: ["node_modules/deepmerge-ts", "node_modules/@prisma/client"],
+      },
+    });
+    expect(outcome.result).toBe("FAIL");
+  });
+
+  it("K: malformed via list is ERROR/FAIL", () => {
+    const outcome = policyInput({
+      "deepmerge-ts": {
+        severity: "high",
+        via: "not-a-list",
+        nodes: approvedNodes,
+      },
+    });
+    expect(outcome.result).toBe("ERROR");
+    expect(outcome.reason).toBe("malformed_via");
+  });
+
+  it("L: empty advisory set with High aggregate severity fails", () => {
+    const outcome = policyInput({
+      "deepmerge-ts": {
+        severity: "high",
+        via: [],
+        nodes: approvedNodes,
+      },
+    });
+    expect(outcome.result).toBe("FAIL");
+  });
+
+  it("null via entries and mixed malformed objects do not PASS", () => {
+    const withNull = policyInput({
+      "deepmerge-ts": {
+        severity: "high",
+        via: [approvedVia, null],
+        nodes: approvedNodes,
+      },
+    });
+    expect(withNull.result).not.toBe("PASS");
+    const mixed = policyInput({
+      "deepmerge-ts": {
+        severity: "high",
+        via: [approvedVia, 12, { unexpected: true }],
+        nodes: approvedNodes,
+      },
+    });
+    expect(mixed.result).not.toBe("PASS");
+  });
+});
