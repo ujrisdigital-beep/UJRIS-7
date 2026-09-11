@@ -56,10 +56,13 @@ const RULES: { type: LegalEventType; pattern: RegExp }[] = [
   { type: "incident", pattern: /\bdiscriminat|\bharass|\bvictimis|\bunfair(?:ly)? treat/i },
 ];
 
+export type MentionRole = "occurrence" | "reference";
+
 export type LegalEventMention = {
   start: number;
   end: number;
   eventType: LegalEventType;
+  role: MentionRole;
 };
 
 function spansOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
@@ -70,8 +73,10 @@ function spansOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number
  * Source-span mentions of legal events. Overlapping matches collapse to the
  * earlier span (then RULES order) so "constructive dismissal" is one occurrence.
  */
+type MentionSpan = { start: number; end: number; eventType: LegalEventType };
+
 export function scanLegalEventMentions(text: string): LegalEventMention[] {
-  const mentions: LegalEventMention[] = [];
+  const mentions: MentionSpan[] = [];
   for (const rule of RULES) {
     const flags = rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`;
     const pattern = new RegExp(rule.pattern.source, flags);
@@ -83,12 +88,113 @@ export function scanLegalEventMentions(text: string): LegalEventMention[] {
     }
   }
   mentions.sort((a, b) => a.start - b.start || a.end - b.end);
-  const distinct: LegalEventMention[] = [];
+  const distinct: MentionSpan[] = [];
   for (const mention of mentions) {
     if (distinct.some((prev) => spansOverlap(prev.start, prev.end, mention.start, mention.end))) continue;
     distinct.push(mention);
   }
-  return distinct;
+  return assignMentionRoles(text, distinct);
+}
+
+/** Same-clause gap that makes a qualifying word the topic of a procedural event. */
+const TIGHT_REFERENCE_GAP =
+  /^\s+(?:for|about|concerning|regarding|over|in relation to)\s+(?:(?:my|the|a|an)\s+)?$/i;
+
+/**
+ * Immediate left context: a procedural noun (including "meeting", which is
+ * not always a scanned event type) plus a topic preposition.
+ */
+const PROCEDURAL_TOPIC_PREFIX =
+  /(?:hearing|appeal|grievance(?:\s+meeting)?|tribunal(?:\s+hearing)?|meeting)\s+(?:for|about|concerning|regarding|over|in relation to)\s+(?:(?:my|the|a|an)\s+)?$/i;
+
+const PROCEDURAL_NOUN =
+  /\b(grievance\s+meeting|tribunal\s+hearing|hearing|appeal|grievance|meeting)\b/gi;
+
+function isNamedQualifyingEvent(type: LegalEventType): boolean {
+  return type === "dismissal" || type === "resignation";
+}
+
+function clauseStart(text: string, index: number): number {
+  for (let i = Math.min(index, text.length) - 1; i >= 0; i--) {
+    const ch = text[i];
+    if (ch === "." || ch === "!" || ch === "?" || ch === "\n") return i + 1;
+  }
+  return 0;
+}
+
+function eventTypeFromProceduralNoun(raw: string): LegalEventType {
+  const normalised = raw.toLowerCase().replace(/\s+/g, " ");
+  if (normalised.includes("hearing")) return "hearing";
+  if (normalised.includes("appeal")) return "appeal";
+  return "grievance";
+}
+
+function precededByProceduralTopicPhrase(text: string, mentionStart: number): boolean {
+  const before = text.slice(clauseStart(text, mentionStart), mentionStart);
+  return PROCEDURAL_TOPIC_PREFIX.test(before);
+}
+
+/**
+ * Last dated-clause procedural noun before `dateStart`. Used when no scanned
+ * occurrence owns the date (e.g. "the meeting concerning my resignation").
+ */
+export function lastProceduralNounBefore(
+  text: string,
+  dateStart: number
+): { start: number; end: number; eventType: LegalEventType; role: MentionRole } | null {
+  const start = clauseStart(text, dateStart);
+  const slice = text.slice(start, dateStart);
+  const pattern = new RegExp(PROCEDURAL_NOUN.source, "gi");
+  let match: RegExpExecArray | null;
+  let last: RegExpExecArray | null = null;
+  while ((match = pattern.exec(slice))) last = match;
+  if (!last) return null;
+  return {
+    start: start + last.index,
+    end: start + last.index + last[0].length,
+    eventType: eventTypeFromProceduralNoun(last[0]),
+    role: "occurrence",
+  };
+}
+
+/**
+ * A qualifying word used as the topic/object of a procedural event is a
+ * reference, not an occurrence that can own a civil date.
+ */
+function assignMentionRoles(text: string, mentions: MentionSpan[]): LegalEventMention[] {
+  const withRoles: LegalEventMention[] = mentions.map((m) => ({ ...m, role: "occurrence" as const }));
+
+  for (let i = 0; i < withRoles.length; i++) {
+    const mention = withRoles[i]!;
+    if (!isNamedQualifyingEvent(mention.eventType)) continue;
+
+    const next = withRoles[i + 1];
+    if (next && PROCEDURAL_ATTENTION_EVENT_TYPES.has(next.eventType)) {
+      const compoundGap = text.slice(mention.end, next.start);
+      if (compoundGap === "" || /^\s+$/.test(compoundGap)) {
+        mention.role = "reference";
+        continue;
+      }
+    }
+
+    if (precededByProceduralTopicPhrase(text, mention.start)) {
+      mention.role = "reference";
+      continue;
+    }
+
+    for (let j = i - 1; j >= 0; j--) {
+      const previous = withRoles[j]!;
+      if (!PROCEDURAL_ATTENTION_EVENT_TYPES.has(previous.eventType)) continue;
+      const gap = text.slice(previous.end, mention.start);
+      if (/[.!?\n]/.test(gap)) break;
+      if (TIGHT_REFERENCE_GAP.test(gap)) {
+        mention.role = "reference";
+        break;
+      }
+    }
+  }
+
+  return withRoles;
 }
 
 export function classifyLegalEventType(context: string): LegalEventType {
