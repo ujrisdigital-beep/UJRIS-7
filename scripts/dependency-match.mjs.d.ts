@@ -1,5 +1,6 @@
 export function normalizeGhsa(id: unknown): string;
 export function canonicalGhsa(id: unknown): string | null;
+export function extractAdvisoryGhsa(value: unknown): { ghsa: string | null; malformed: boolean };
 
 export type PathClass = "dev_tooling" | "production_runtime" | "unknown";
 

@@ -275,16 +275,84 @@ function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function ghsaFromScalarString(value) {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  const direct = canonicalGhsa(trimmed);
-  if (direct) return direct;
-  if (/^https?:\/\//i.test(trimmed) || /github\.com\/advisories\//i.test(trimmed)) {
-    const match = trimmed.match(/GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}/i);
-    return match ? canonicalGhsa(match[0]) : null;
+function decodeIdentityToken(token) {
+  if (typeof token !== "string") return "";
+  try {
+    return decodeURIComponent(token);
+  } catch {
+    return token;
   }
-  return null;
+}
+
+function coerceHttpUrl(raw) {
+  try {
+    return new URL(raw);
+  } catch {
+    if (/^github\.com\//i.test(raw)) {
+      try {
+        return new URL(`https://${raw}`);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+/**
+ * Known-provider URL contract: GitHub `/advisories/<canonical-ghsa>` only.
+ * Nested path suffixes, query/fragment contamination, and other hosts that
+ * merely contain a GHSA-looking prefix never truncate into an exception ID.
+ */
+function ghsaFromKnownUrl(raw) {
+  const url = coerceHttpUrl(raw);
+  if (!url) return { ghsa: null, malformed: true };
+  const host = url.hostname.replace(/^www\./i, "").toLowerCase();
+  const segments = url.pathname.split("/").filter(Boolean).map(decodeIdentityToken);
+
+  const extras = [];
+  for (const value of url.searchParams.values()) extras.push(decodeIdentityToken(value));
+  if (url.hash) extras.push(decodeIdentityToken(url.hash.replace(/^#/, "")));
+
+  function malformedIfGhsaLike(token) {
+    if (!token) return false;
+    return /GHSA-/i.test(token) && !canonicalGhsa(token);
+  }
+
+  if (host === "github.com") {
+    if (segments.length === 2 && segments[0].toLowerCase() === "advisories") {
+      const id = canonicalGhsa(segments[1]);
+      if (!id) return { ghsa: null, malformed: true };
+      if (extras.some(malformedIfGhsaLike)) return { ghsa: null, malformed: true };
+      return { ghsa: id, malformed: false };
+    }
+    if (segments.some((segment) => /GHSA-/i.test(segment)) || extras.some((token) => /GHSA-/i.test(token))) {
+      return { ghsa: null, malformed: true };
+    }
+    return { ghsa: null, malformed: false };
+  }
+
+  if (segments.some((segment) => /GHSA-/i.test(segment)) || extras.some((token) => /GHSA-/i.test(token)) || /GHSA-/i.test(url.href)) {
+    return { ghsa: null, malformed: true };
+  }
+  return { ghsa: null, malformed: false };
+}
+
+/**
+ * Exact advisory identity. Never returns a canonical GHSA extracted as a
+ * prefix/substring of a longer malformed token.
+ */
+export function extractAdvisoryGhsa(value) {
+  if (typeof value !== "string") return { ghsa: null, malformed: true };
+  const trimmed = value.trim();
+  if (!trimmed) return { ghsa: null, malformed: true };
+  const direct = canonicalGhsa(trimmed);
+  if (direct) return { ghsa: direct, malformed: false };
+  if (/^https?:\/\//i.test(trimmed) || /^github\.com\/advisories\//i.test(trimmed)) {
+    return ghsaFromKnownUrl(trimmed);
+  }
+  if (/GHSA-/i.test(trimmed)) return { ghsa: null, malformed: true };
+  return { ghsa: null, malformed: false };
 }
 
 function hasNonScalarIdentityField(item) {
@@ -293,14 +361,19 @@ function hasNonScalarIdentityField(item) {
 }
 
 function ghsaFromViaItem(item) {
-  if (typeof item !== "object" || item == null || Array.isArray(item)) return null;
-  if (hasNonScalarIdentityField(item)) return null;
-  const candidates = [item.url, item.id, item.ghsa, item.advisoryId];
-  for (const candidate of candidates) {
-    const parsed = ghsaFromScalarString(candidate);
-    if (parsed) return parsed;
+  if (typeof item !== "object" || item == null || Array.isArray(item)) {
+    return { ghsa: null, malformed: true };
   }
-  return null;
+  if (hasNonScalarIdentityField(item)) return { ghsa: null, malformed: true };
+  const candidates = [item.url, item.id, item.ghsa, item.advisoryId];
+  let found = null;
+  for (const candidate of candidates) {
+    if (candidate == null || candidate === "") continue;
+    const parsed = extractAdvisoryGhsa(candidate);
+    if (parsed.malformed) return { ghsa: null, malformed: true };
+    if (parsed.ghsa && !found) found = parsed.ghsa;
+  }
+  return { ghsa: found, malformed: false };
 }
 
 /**
@@ -358,9 +431,13 @@ function analyzeViaList(vuln, vulns, seen) {
       malformed = true;
       continue;
     }
-    const ghsa = ghsaFromViaItem(item);
-    if (ghsa) {
-      ghsaIds.push(ghsa);
+    const parsed = ghsaFromViaItem(item);
+    if (parsed.malformed) {
+      malformed = true;
+      continue;
+    }
+    if (parsed.ghsa) {
+      ghsaIds.push(parsed.ghsa);
       continue;
     }
     if (Object.keys(item).length === 0) {
