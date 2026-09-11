@@ -142,6 +142,19 @@ export function inferLimitationStart(dates: ExtractedDate[]): DateInferenceResul
     });
   }
 
+  const referencedOnly = dates.some(
+    (d) =>
+      (d.eventType === "dismissal" || d.eventType === "resignation") && d.mentionRole === "reference"
+  );
+  if (referencedOnly && resolvedQualifying.length === 0) {
+    return pack({
+      ...base,
+      status: "insufficient_data",
+      warning_date: null,
+      reason: "Possible limitation issue — relevant dismissal/resignation date is unresolved.",
+    });
+  }
+
   const eligible = candidate_dates.filter(
     (c): c is LimitationCandidate & { date: Date } =>
       c.date !== null && c.parse_status === "valid" && mayStartLimitationClock(c.event_type)

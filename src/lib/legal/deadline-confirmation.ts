@@ -150,6 +150,7 @@ export type QualifyingCandidate = {
   sourceStartOffset: number;
   sourceEndOffset: number;
   dateOwnerEventType: LegalEventType | null;
+  mentionRole: ExtractedDate["mentionRole"];
 };
 
 export function qualifyingCandidatesFromDates(dates: ExtractedDate[]): QualifyingCandidate[] {
@@ -164,6 +165,7 @@ export function qualifyingCandidatesFromDates(dates: ExtractedDate[]): Qualifyin
       sourceStartOffset: o.sourceStartOffset,
       sourceEndOffset: o.sourceEndOffset,
       dateOwnerEventType: o.dateOwnerEventType,
+      mentionRole: o.mentionRole,
     }));
 }
 
@@ -179,9 +181,11 @@ export type QualifyingSourceOccurrence = {
   sourceEndOffset: number;
   resolved: boolean;
   dateOwnerEventType: LegalEventType | null;
+  mentionRole: ExtractedDate["mentionRole"];
 };
 
 export function isResolvedQualifyingDate(d: ExtractedDate): boolean {
+  if (d.mentionRole === "reference") return false;
   if (!d.date || !d.civilDate || d.parseStatus !== "valid") return false;
   if (!mayStartLimitationClock(d.eventType)) return false;
   if (d.dateOwnerEventType && d.dateOwnerEventType !== d.eventType) return false;
@@ -210,6 +214,7 @@ export function qualifyingSourceOccurrences(dates: ExtractedDate[]): QualifyingS
   const seen = new Set<string>();
   for (const d of dates) {
     if (!mayStartLimitationClock(d.eventType)) continue;
+    if (d.mentionRole === "reference") continue;
     const key = `${d.sourceId}:${d.sourceStartOffset}:${d.sourceEndOffset}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -226,6 +231,7 @@ export function qualifyingSourceOccurrences(dates: ExtractedDate[]): QualifyingS
       sourceEndOffset: d.sourceEndOffset,
       resolved,
       dateOwnerEventType: d.dateOwnerEventType,
+      mentionRole: d.mentionRole,
     });
   }
   return occurrences;
@@ -343,6 +349,13 @@ export function evaluateLimitationConfirmation(input: StoredDeadlineProvenance):
   }
 
   const sole = candidates[0]!;
+  if (sole.mentionRole === "reference") {
+    return refuse(
+      "ambiguous",
+      "Possible limitation issue — relevant dismissal/resignation date is unresolved. Confirmation is refused.",
+      "date_ownership_unresolved"
+    );
+  }
   if (
     sole.dateOwnerEventType &&
     (sole.dateOwnerEventType !== sole.eventType || !mayStartLimitationClock(sole.dateOwnerEventType))
