@@ -5,7 +5,7 @@
 > and what's next. Update it as part of every ticket — a ticket is not
 > done until this file reflects reality.
 
-Last updated: 2026-09-11 (ticket: Step 2A-R7 clause-level event ownership + advisory ID type safety — see Ticket Log).
+Last updated: 2026-09-11 (ticket: Step 2A-R8 procedural-reference coverage + exact GHSA token identity — see Ticket Log).
 
 ## 1. What UJRIS is
 
@@ -79,6 +79,17 @@ full record. Summary:
   High advisory is a dated development-only exception — see
   `docs/security/DEPENDENCY_EXCEPTION_REGISTER.md`.
   `docs/security/SECURITY_REGRESSION_MATRIX.md`.
+
+**Step 2A-R8 invariants (must hold; R7 clause-ownership / scalar-ID still hold):**
+
+- **PROCEDURAL REFERENCE:** a qualifying-event term used solely as the
+  subject matter, target, modifier, basis, or reference of a dated
+  procedural event does not inherit that procedural event's date and does
+  not become a limitation candidate.
+- **EXACT ADVISORY TOKEN:** a dependency advisory exception may match only
+  an exact canonical advisory identity. A valid GHSA substring or prefix
+  extracted from a larger malformed token or URL segment is invalid and
+  must fail closed.
 
 **Step 2A-R7 invariants (must hold; R6 ownership / advisory-set still hold):**
 
@@ -233,6 +244,30 @@ should all pass cleanly before any ticket is considered done — see Ticket
 Log for the last verified run of each.
 
 ## 7. Ticket log
+
+### 2026-09-11 — Step 2A-R8 (Codex 2A-R7 FAIL — procedural reference + GHSA URL token)
+
+Branch: `step-2a-security-test-foundation` — **not merged**. Step 2B /
+Supabase **not started**. Forensic worker **not implemented**. R4–R7
+systems **not reopened** except as required to fix the two reproduced
+blockers.
+
+Codex independently reproduced: three procedural-reference phrasings
+(`appeal against`, `tribunal hearing related to`, `hearing re`) still
+confirming a dismissal limitation; a malformed advisory URL whose GHSA
+prefix truncated into GHSA-ggr8-5vv4-36mx.
+
+Remediation: expanded relation/head grammar with tight suffix checks;
+GitHub `/advisories/<canonical-ghsa>` exact segment extraction.
+EX-DEP-001 itself is unchanged.
+
+See `docs/implementation/STEP2A_R8_PLAN.md` and
+`docs/implementation/STEP2A_R8_IMPLEMENTATION_REPORT.md`.
+
+**Requires independent review:** YES — return this branch to Codex for a
+narrow check of the three procedural-reference repros, the malformed-URL
+advisory repro, and focused regression. Do not merge. Do not start
+Supabase. Do not start Step 2B. Do not claim production-ready.
 
 ### 2026-09-11 — Step 2A-R7 (Codex 2A-R6 FAIL — clause ownership + advisory type)
 

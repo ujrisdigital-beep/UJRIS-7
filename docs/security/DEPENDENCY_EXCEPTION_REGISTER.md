@@ -25,6 +25,12 @@ values, comma-combined strings, and other malformed identities never
 inherit an exception. `String()` / template coercion is not used on
 advisory identity.
 
+**EXACT ADVISORY TOKEN INVARIANT:** a GHSA may be taken from a URL only
+when the entire decoded GitHub `/advisories/<segment>` equals the
+canonical identity. A valid GHSA substring or prefix inside a longer
+malformed token, nested path, query, fragment, or foreign host must fail
+closed.
+
 Reviewed: 2026-09-10  
 Next review / `review_by`: 2026-12-31  
 Owner: UJRIS engineering — Step 2A security track
