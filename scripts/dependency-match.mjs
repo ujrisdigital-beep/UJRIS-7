@@ -7,8 +7,21 @@
  * UNKNOWN and production_runtime never inherit a development-only exception.
  */
 
+const GHSA_CANONICAL = /^GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
+
+/**
+ * Scalar GHSA only. Arrays/objects/numbers must never coerce via String().
+ */
+export function canonicalGhsa(id) {
+  if (typeof id !== "string") return null;
+  const trimmed = id.trim().toUpperCase();
+  if (!GHSA_CANONICAL.test(trimmed)) return null;
+  return trimmed;
+}
+
+/** @deprecated Prefer canonicalGhsa. Never stringifies non-scalars. */
 export function normalizeGhsa(id) {
-  return String(id || "").toUpperCase();
+  return canonicalGhsa(id) ?? "";
 }
 
 /** @typedef {"dev_tooling" | "production_runtime" | "unknown"} PathClass */
@@ -96,8 +109,8 @@ function pathNodeMatches(node, declared) {
 }
 
 export function exceptionMatchesRecord(record, exception) {
-  const exId = normalizeGhsa(exception.advisoryId || exception.id);
-  if (!exId.startsWith("GHSA-")) {
+  const exId = canonicalGhsa(exception.advisoryId) || canonicalGhsa(exception.id);
+  if (!exId) {
     return { ok: false, reason: "advisory_mismatch" };
   }
 
@@ -107,10 +120,11 @@ export function exceptionMatchesRecord(record, exception) {
     return { ok: false, reason: "package_mismatch" };
   }
 
-  // Advisory identity is mandatory and exact. Package, path, via-name,
-  // parent package, and severity must never grant an exception alone.
-  const recordGhsas = [...new Set((record.ghsaIds ?? []).map(normalizeGhsa).filter(Boolean))];
-  if (recordGhsas.length !== 1 || recordGhsas[0] !== exId) {
+  const collected = collectCanonicalGhsas(record.ghsaIds);
+  if (collected.malformed) {
+    return { ok: false, reason: "malformed_advisory_id" };
+  }
+  if (collected.ids.length !== 1 || collected.ids[0] !== exId) {
     return { ok: false, reason: "advisory_mismatch" };
   }
 
@@ -135,6 +149,26 @@ export function exceptionMatchesRecord(record, exception) {
   return { ok: true, reason: "matched", pathClass };
 }
 
+function collectCanonicalGhsas(ghsaIds) {
+  if (ghsaIds == null) return { ids: [], malformed: false };
+  if (!Array.isArray(ghsaIds)) return { ids: [], malformed: true };
+  const ids = [];
+  let malformed = false;
+  for (const raw of ghsaIds) {
+    if (typeof raw !== "string") {
+      malformed = true;
+      continue;
+    }
+    const id = canonicalGhsa(raw);
+    if (!id) {
+      malformed = true;
+      continue;
+    }
+    ids.push(id);
+  }
+  return { ids: [...new Set(ids)], malformed };
+}
+
 function exceptionStillValid(match, record, today) {
   if (new Date(match.expires) < new Date(today)) {
     return `Expired exception ${match.id} for ${record.package}`;
@@ -156,9 +190,12 @@ export function evaluateExceptionGate(records, policy, today) {
       ...record,
       pathClass: record.pathClass ?? classifyRecordPaths(record.nodes ?? []),
     };
-    const ghsas = [...new Set((annotated.ghsaIds ?? []).map(normalizeGhsa).filter(Boolean))];
-    if (annotated.malformedVia) {
-      failures.push(`Malformed advisory via in ${annotated.package} (pathClass=${annotated.pathClass})`);
+    const collected = collectCanonicalGhsas(annotated.ghsaIds);
+    const ghsas = collected.ids;
+    if (annotated.malformedVia || collected.malformed) {
+      failures.push(
+        `Malformed advisory identity in ${annotated.package} (pathClass=${annotated.pathClass})`
+      );
       continue;
     }
     if (annotated.emptyAdvisorySet || (ghsas.length === 0 && (annotated.unidentifiedAdvisories ?? 0) > 0) || ghsas.length === 0) {
@@ -238,13 +275,30 @@ function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function ghsaFromScalarString(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  const direct = canonicalGhsa(trimmed);
+  if (direct) return direct;
+  if (/^https?:\/\//i.test(trimmed) || /github\.com\/advisories\//i.test(trimmed)) {
+    const match = trimmed.match(/GHSA-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}/i);
+    return match ? canonicalGhsa(match[0]) : null;
+  }
+  return null;
+}
+
+function hasNonScalarIdentityField(item) {
+  const candidates = [item.url, item.id, item.ghsa, item.advisoryId];
+  return candidates.some((candidate) => candidate != null && candidate !== "" && typeof candidate !== "string");
+}
+
 function ghsaFromViaItem(item) {
-  if (typeof item !== "object" || item == null) return null;
+  if (typeof item !== "object" || item == null || Array.isArray(item)) return null;
+  if (hasNonScalarIdentityField(item)) return null;
   const candidates = [item.url, item.id, item.ghsa, item.advisoryId];
   for (const candidate of candidates) {
-    if (!candidate) continue;
-    const match = String(candidate).match(/GHSA-[a-z0-9-]+/i);
-    if (match) return match[0].toUpperCase();
+    const parsed = ghsaFromScalarString(candidate);
+    if (parsed) return parsed;
   }
   return null;
 }
@@ -297,6 +351,10 @@ function analyzeViaList(vuln, vulns, seen) {
       continue;
     }
     if (!isPlainObject(item)) {
+      malformed = true;
+      continue;
+    }
+    if (hasNonScalarIdentityField(item)) {
       malformed = true;
       continue;
     }

@@ -1,4 +1,5 @@
 export function normalizeGhsa(id: unknown): string;
+export function canonicalGhsa(id: unknown): string | null;
 
 export type PathClass = "dev_tooling" | "production_runtime" | "unknown";
 
@@ -9,7 +10,7 @@ export function exceptionMatchesRecord(
   record: {
     package: string;
     severity?: string;
-    ghsaIds?: string[];
+    ghsaIds?: unknown;
     viaNames?: string[];
     nodes?: string[];
     pathClass?: PathClass;
@@ -31,7 +32,7 @@ export function evaluateExceptionGate(
   records: Array<{
     package: string;
     severity: string;
-    ghsaIds?: string[];
+    ghsaIds?: unknown;
     viaNames?: string[];
     unidentifiedAdvisories?: number;
     emptyAdvisorySet?: boolean;
