@@ -2,6 +2,7 @@ import { addDays } from "date-fns";
 import { monthNameToNumber, parseLegalDate, parseNumericDateToken, parseStrictCivilDate, type ParseStatus } from "@/lib/legal/strict-date";
 import {
   classifyLegalEventType,
+  eventAssertionOwner,
   lastProceduralNounBefore,
   scanLegalEventMentions,
   type LegalEventType,
@@ -390,15 +391,21 @@ function applyEventDateOwnership(text: string, results: ExtractedDate[]): void {
   for (const date of results) {
     const range = sentenceRange(text, date.sourceStartOffset);
     const inSentence = mentions.filter((m) => m.start >= range.start && m.start < range.end);
-    const owner = nearestEventOwner(inSentence, date.sourceStartOffset)
-      ?? lastProceduralNounBefore(text, date.sourceStartOffset);
+    const assertion = eventAssertionOwner(text, date.sourceStartOffset, date.sourceEndOffset, mentions);
+    const owner =
+      assertion?.mention ??
+      nearestEventOwner(inSentence, date.sourceStartOffset) ??
+      lastProceduralNounBefore(text, date.sourceStartOffset);
     if (!owner) continue;
     date.eventType = owner.eventType;
     date.kind = owner.eventType;
     date.dateOwnerEventType = owner.eventType;
     date.dateOwnerStart = owner.start;
     date.dateOwnerEnd = owner.end;
-    date.mentionRole = owner.role;
+    date.mentionRole =
+      assertion?.binding === "local" && (owner.eventType === "dismissal" || owner.eventType === "resignation")
+        ? "occurrence"
+        : owner.role;
   }
 
   for (const mention of mentions) {

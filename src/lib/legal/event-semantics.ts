@@ -98,18 +98,23 @@ export function scanLegalEventMentions(text: string): LegalEventMention[] {
 
 /** Same-clause relation that makes a qualifying word the topic of a procedural event. */
 const RELATION_SOURCE =
-  "related\\s+to|relating\\s+to|in\\s+relation\\s+to|regarding|concerning|concerned|against|about|over|for|re";
+  "related\\s+to|relating\\s+to|in\\s+relation\\s+to|regarding|concerning|concerned|concerns|against|about|over|for|re";
 
 const DETERMINER_SOURCE = "(?:(?:my|the|a|an)\\s+)?";
+const RELATIVE_LINKER_SOURCE = "(?:(?:which|that|who)\\s+(?:(?:is|was)\\s+)?)?";
+const COMMA_GAP_SOURCE = "[,\\s]+";
 
 /** Procedural heads that may own a date without starting the limitation clock. */
 const PROCEDURAL_HEAD_SOURCE =
   "case\\s+management\\s+hearing|disciplinary\\s+hearing|preliminary\\s+hearing|final\\s+hearing|appeal\\s+hearing|grievance\\s+meeting|tribunal\\s+hearing|hearing|appeal|grievance|meeting|review|investigation";
 
-const TIGHT_REFERENCE_GAP = new RegExp(`^\\s+(?:${RELATION_SOURCE})\\s+${DETERMINER_SOURCE}$`, "i");
+const TIGHT_REFERENCE_GAP = new RegExp(
+  `^${COMMA_GAP_SOURCE}${RELATIVE_LINKER_SOURCE}(?:${RELATION_SOURCE})[,\\s]*${DETERMINER_SOURCE}$`,
+  "i"
+);
 
 const PROCEDURAL_TOPIC_PREFIX = new RegExp(
-  `(?:${PROCEDURAL_HEAD_SOURCE})\\s+(?:${RELATION_SOURCE})\\s+${DETERMINER_SOURCE}$`,
+  `(?:${PROCEDURAL_HEAD_SOURCE})${COMMA_GAP_SOURCE}?${RELATIVE_LINKER_SOURCE}(?:${RELATION_SOURCE})[,\\s]*${DETERMINER_SOURCE}$`,
   "i"
 );
 
@@ -137,6 +142,100 @@ function eventTypeFromProceduralNoun(raw: string): LegalEventType {
   if (normalised.includes("hearing")) return "hearing";
   if (normalised.includes("appeal")) return "appeal";
   return "grievance";
+}
+
+function clauseEnd(text: string, index: number): number {
+  for (let i = index; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "." || ch === "!" || ch === "?" || ch === "\n") return i + 1;
+  }
+  return text.length;
+}
+
+const OUTER_DATE_PREDICATE =
+  /\b(?:is|was|are|were|took\s+place|scheduled|listed)\s+(?:on|for)\s+$/i;
+
+const DATE_FIRST_PROCEDURAL =
+  /^[,:\s]*(?:the\s+)?(?:(?:tribunal|disciplinary|preliminary|final|appeal|grievance|case\s+management)\s+)?(?:hearing|appeal|grievance|meeting|review|investigation)\b/i;
+
+const LOCAL_QUALIFYING_DATE_GAP =
+  /^\s+(?:(?:(?:that|which|who|i|we|they)\s+)?(?:received|got|had|happened|occurred|took\s+effect|took\s+place|was)\s+)*(?:on|for)\s+$/i;
+
+function wrappingPunctuationSpan(
+  text: string,
+  dateStart: number,
+  dateEnd: number,
+  rangeStart: number,
+  rangeEnd: number
+): { start: number; end: number } | null {
+  const commaLeft = text.lastIndexOf(",", dateStart - 1);
+  const commaRight = text.indexOf(",", dateEnd);
+  if (commaLeft >= rangeStart && commaRight !== -1 && commaRight < rangeEnd) {
+    return { start: commaLeft, end: commaRight };
+  }
+  const parenLeft = text.lastIndexOf("(", dateStart - 1);
+  const parenRight = text.indexOf(")", dateEnd);
+  if (parenLeft >= rangeStart && parenRight !== -1 && parenRight < rangeEnd) {
+    return { start: parenLeft, end: parenRight };
+  }
+  return null;
+}
+
+export type DateAssertionBinding = "outer" | "local" | "date-first";
+
+/**
+ * Bind a date token to the event assertion whose predicate or local date
+ * phrase expresses it. Nested qualifying words do not inherit an outer
+ * procedural predicate date merely because they sit closer to the token.
+ */
+export function eventAssertionOwner(
+  text: string,
+  dateStart: number,
+  dateEnd: number,
+  mentions: LegalEventMention[]
+): { mention: LegalEventMention; binding: DateAssertionBinding } | null {
+  const rangeStart = clauseStart(text, dateStart);
+  const rangeEnd = clauseEnd(text, dateStart);
+  const inClause = mentions.filter((m) => m.start >= rangeStart && m.start < rangeEnd);
+  const after = text.slice(dateEnd, rangeEnd);
+  const before = text.slice(rangeStart, dateStart);
+
+  if (DATE_FIRST_PROCEDURAL.test(after)) {
+    const procedural = inClause.find(
+      (m) => m.start >= dateEnd && PROCEDURAL_ATTENTION_EVENT_TYPES.has(m.eventType)
+    );
+    if (procedural) return { mention: procedural, binding: "date-first" };
+  }
+
+  if (OUTER_DATE_PREDICATE.test(before)) {
+    const procedural = [...inClause]
+      .reverse()
+      .find((m) => m.start <= dateStart && PROCEDURAL_ATTENTION_EVENT_TYPES.has(m.eventType));
+    if (procedural) return { mention: { ...procedural, role: "occurrence" }, binding: "outer" };
+    const noun = lastProceduralNounBefore(text, dateStart);
+    if (noun) return { mention: noun, binding: "outer" };
+  }
+
+  const wrapped = wrappingPunctuationSpan(text, dateStart, dateEnd, rangeStart, rangeEnd);
+  if (wrapped) {
+    const inner = inClause.filter((m) => m.start >= wrapped.start && m.start < wrapped.end);
+    const qualifying = [...inner].reverse().find((m) => isNamedQualifyingEvent(m.eventType));
+    if (qualifying) {
+      return { mention: { ...qualifying, role: "occurrence" }, binding: "local" };
+    }
+    const procedural = [...inner]
+      .reverse()
+      .find((m) => PROCEDURAL_ATTENTION_EVENT_TYPES.has(m.eventType));
+    if (procedural) return { mention: { ...procedural, role: "occurrence" }, binding: "outer" };
+  }
+
+  const preceding = inClause.filter((m) => m.start <= dateStart);
+  const last = preceding[preceding.length - 1];
+  if (last && isNamedQualifyingEvent(last.eventType) && LOCAL_QUALIFYING_DATE_GAP.test(text.slice(last.end, dateStart))) {
+    return { mention: { ...last, role: "occurrence" }, binding: "local" };
+  }
+
+  return null;
 }
 
 function precededByProceduralTopicPhrase(text: string, mentionStart: number): boolean {
