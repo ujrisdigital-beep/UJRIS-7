@@ -1,6 +1,10 @@
 import { addDays } from "date-fns";
 import { monthNameToNumber, parseLegalDate, parseNumericDateToken, parseStrictCivilDate, type ParseStatus } from "@/lib/legal/strict-date";
-import { classifyLegalEventType, mayStartLimitationClock, type LegalEventType } from "@/lib/legal/event-semantics";
+import {
+  classifyLegalEventType,
+  scanLegalEventMentions,
+  type LegalEventType,
+} from "@/lib/legal/event-semantics";
 import { addLondonCivilDays, londonCivilUtcDate, now } from "@/lib/clock";
 
 /**
@@ -97,6 +101,10 @@ export interface ExtractedDate {
   sourceStartOffset: number;
   sourceEndOffset: number;
   occurrenceIndex: number;
+  /** Event mention that owns this date token; null if no local owner. */
+  dateOwnerEventType: LegalEventType | null;
+  dateOwnerStart: number | null;
+  dateOwnerEnd: number | null;
 }
 
 const NARRATIVE_SOURCE_ID = "narrative";
@@ -142,6 +150,9 @@ function extracted(
     sourceEndOffset: number;
     sourceId?: string;
     eventType?: LegalEventType;
+    dateOwnerEventType?: LegalEventType | null;
+    dateOwnerStart?: number | null;
+    dateOwnerEnd?: number | null;
   }
 ): ExtractedDate {
   const eventType = extra.eventType ?? classifyLegalEventType(context);
@@ -163,6 +174,9 @@ function extracted(
     sourceStartOffset: extra.sourceStartOffset,
     sourceEndOffset: extra.sourceEndOffset,
     occurrenceIndex: 0,
+    dateOwnerEventType: extra.dateOwnerEventType ?? null,
+    dateOwnerStart: extra.dateOwnerStart ?? null,
+    dateOwnerEnd: extra.dateOwnerEnd ?? null,
   };
 }
 
@@ -336,7 +350,7 @@ export function extractDates(text: string, reference: Date = now()): ExtractedDa
     );
   }
 
-  appendMissingQualifyingMentions(text, results);
+  applyEventDateOwnership(text, results);
 
   const seen = new Set<string>();
   return results
@@ -350,69 +364,57 @@ export function extractDates(text: string, reference: Date = now()): ExtractedDa
     .map((r, occurrenceIndex) => ({ ...r, occurrenceIndex }));
 }
 
-const QUALIFYING_MENTION_PATTERNS: { eventType: "dismissal" | "resignation"; pattern: RegExp }[] = [
-  { eventType: "dismissal", pattern: /\bdismiss(?:ed|al)\b|\bsack(?:ed)?\b|\bfired\b|\bterminated\b|\blet go\b/gi },
-  { eventType: "resignation", pattern: /\bresign(?:ed|ation)\b|\bconstructive dismiss/gi },
-];
+function nearestEventOwner(
+  mentions: { start: number; end: number; eventType: LegalEventType }[],
+  dateStart: number
+): { start: number; end: number; eventType: LegalEventType } | null {
+  if (mentions.length === 0) return null;
+  const preceding = mentions.filter((m) => m.start <= dateStart);
+  if (preceding.length > 0) return preceding[preceding.length - 1]!;
+  return mentions[0]!;
+}
 
-function appendMissingQualifyingMentions(text: string, results: ExtractedDate[]): void {
-  const mentions: { start: number; end: number; eventType: "dismissal" | "resignation" }[] = [];
-  for (const { eventType, pattern } of QUALIFYING_MENTION_PATTERNS) {
-    pattern.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(text))) {
-      mentions.push({ start: match.index, end: match.index + match[0].length, eventType });
-    }
+/**
+ * Bind each date token to the nearest same-sentence event mention.
+ * Leftover dates are never borrowed by an undated qualifying event.
+ */
+function applyEventDateOwnership(text: string, results: ExtractedDate[]): void {
+  const mentions = scanLegalEventMentions(text);
+
+  for (const date of results) {
+    const range = sentenceRange(text, date.sourceStartOffset);
+    const inSentence = mentions.filter((m) => m.start >= range.start && m.start < range.end);
+    const owner = nearestEventOwner(inSentence, date.sourceStartOffset);
+    if (!owner) continue;
+    date.eventType = owner.eventType;
+    date.kind = owner.eventType;
+    date.dateOwnerEventType = owner.eventType;
+    date.dateOwnerStart = owner.start;
+    date.dateOwnerEnd = owner.end;
   }
-  mentions.sort((a, b) => a.start - b.start || a.end - b.end);
-  const distinct: typeof mentions = [];
+
   for (const mention of mentions) {
-    if (distinct.some((prev) => spansOverlap(prev.start, prev.end, mention.start, mention.end))) continue;
-    distinct.push(mention);
-  }
-
-  const seenSentences = new Set<string>();
-  for (const mention of distinct) {
-    const range = sentenceRange(text, mention.start);
-    const sentenceKey = `${range.start}:${range.end}`;
-    if (seenSentences.has(sentenceKey)) continue;
-    seenSentences.add(sentenceKey);
-
-    const datesInSentence = results.filter(
-      (d) => d.sourceStartOffset >= range.start && d.sourceStartOffset < range.end
+    // Bare incident keywords ("discrimination") are not a second limitation
+    // source. Only dismissal/resignation mentions stay unresolved when undated.
+    if (mention.eventType !== "dismissal" && mention.eventType !== "resignation") continue;
+    const owned = results.some(
+      (d) => d.dateOwnerStart === mention.start && d.dateOwnerEnd === mention.end
     );
-    const mentionsInSentence = distinct.filter((m) => m.start >= range.start && m.start < range.end);
-    const remaining = [...datesInSentence].sort((a, b) => a.sourceStartOffset - b.sourceStartOffset);
-    const assignedMentions = new Set<number>();
-
-    for (const owner of mentionsInSentence) {
-      const following = remaining.filter((d) => d.sourceStartOffset >= owner.start);
-      const pick = following[0] ?? remaining[0];
-      if (!pick) continue;
-      assignedMentions.add(owner.start);
-      remaining.splice(remaining.indexOf(pick), 1);
-      // Same-sentence procedural keywords must not reclassify the date that
-      // belongs to a qualifying mention (dismissal + later hearing).
-      if (pick.eventType !== owner.eventType && !mayStartLimitationClock(pick.eventType)) {
-        pick.eventType = owner.eventType;
-        pick.kind = owner.eventType;
-      }
+    if (owned) continue;
+    if (results.some((r) => spansOverlap(r.sourceStartOffset, r.sourceEndOffset, mention.start, mention.end))) {
+      continue;
     }
-
-    for (const unassigned of mentionsInSentence) {
-      if (assignedMentions.has(unassigned.start)) continue;
-      if (results.some((r) => spansOverlap(r.sourceStartOffset, r.sourceEndOffset, unassigned.start, unassigned.end))) {
-        continue;
-      }
-      results.push(
-        extracted(text.slice(unassigned.start, unassigned.end), sentenceAt(text, unassigned.start), null, {
-          parseStatus: "missing",
-          sourceStartOffset: unassigned.start,
-          sourceEndOffset: unassigned.end,
-          eventType: unassigned.eventType,
-        })
-      );
-    }
+    results.push(
+      extracted(text.slice(mention.start, mention.end), sentenceAt(text, mention.start), null, {
+        parseStatus: "missing",
+        sourceStartOffset: mention.start,
+        sourceEndOffset: mention.end,
+        eventType: mention.eventType,
+        dateOwnerEventType: mention.eventType,
+        dateOwnerStart: mention.start,
+        dateOwnerEnd: mention.end,
+      })
+    );
   }
 }
 

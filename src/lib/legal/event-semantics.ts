@@ -56,6 +56,41 @@ const RULES: { type: LegalEventType; pattern: RegExp }[] = [
   { type: "incident", pattern: /\bdiscriminat|\bharass|\bvictimis|\bunfair(?:ly)? treat/i },
 ];
 
+export type LegalEventMention = {
+  start: number;
+  end: number;
+  eventType: LegalEventType;
+};
+
+function spansOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+/**
+ * Source-span mentions of legal events. Overlapping matches collapse to the
+ * earlier span (then RULES order) so "constructive dismissal" is one occurrence.
+ */
+export function scanLegalEventMentions(text: string): LegalEventMention[] {
+  const mentions: LegalEventMention[] = [];
+  for (const rule of RULES) {
+    const flags = rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`;
+    const pattern = new RegExp(rule.pattern.source, flags);
+    pattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text))) {
+      mentions.push({ start: match.index, end: match.index + match[0].length, eventType: rule.type });
+      if (match[0].length === 0) pattern.lastIndex += 1;
+    }
+  }
+  mentions.sort((a, b) => a.start - b.start || a.end - b.end);
+  const distinct: LegalEventMention[] = [];
+  for (const mention of mentions) {
+    if (distinct.some((prev) => spansOverlap(prev.start, prev.end, mention.start, mention.end))) continue;
+    distinct.push(mention);
+  }
+  return distinct;
+}
+
 export function classifyLegalEventType(context: string): LegalEventType {
   const text = context.trim();
   if (!text) return "unknown";
