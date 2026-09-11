@@ -48,6 +48,7 @@ export type ConfirmationRefusalReason =
   | "ambiguous"
   | "competing_qualifying_source"
   | "unresolved_qualifying_source"
+  | "date_ownership_unresolved"
   | "inference_version_mismatch"
   | "missing_fields";
 
@@ -148,6 +149,7 @@ export type QualifyingCandidate = {
   raw: string;
   sourceStartOffset: number;
   sourceEndOffset: number;
+  dateOwnerEventType: LegalEventType | null;
 };
 
 export function qualifyingCandidatesFromDates(dates: ExtractedDate[]): QualifyingCandidate[] {
@@ -161,6 +163,7 @@ export function qualifyingCandidatesFromDates(dates: ExtractedDate[]): Qualifyin
       raw: o.raw,
       sourceStartOffset: o.sourceStartOffset,
       sourceEndOffset: o.sourceEndOffset,
+      dateOwnerEventType: o.dateOwnerEventType,
     }));
 }
 
@@ -175,10 +178,15 @@ export type QualifyingSourceOccurrence = {
   sourceStartOffset: number;
   sourceEndOffset: number;
   resolved: boolean;
+  dateOwnerEventType: LegalEventType | null;
 };
 
 export function isResolvedQualifyingDate(d: ExtractedDate): boolean {
-  return Boolean(d.date && d.civilDate && d.parseStatus === "valid" && mayStartLimitationClock(d.eventType));
+  if (!d.date || !d.civilDate || d.parseStatus !== "valid") return false;
+  if (!mayStartLimitationClock(d.eventType)) return false;
+  if (d.dateOwnerEventType && d.dateOwnerEventType !== d.eventType) return false;
+  if (d.dateOwnerEventType && !mayStartLimitationClock(d.dateOwnerEventType)) return false;
+  return true;
 }
 
 function unresolvedOccurrenceFingerprint(d: ExtractedDate): string {
@@ -217,6 +225,7 @@ export function qualifyingSourceOccurrences(dates: ExtractedDate[]): QualifyingS
       sourceStartOffset: d.sourceStartOffset,
       sourceEndOffset: d.sourceEndOffset,
       resolved,
+      dateOwnerEventType: d.dateOwnerEventType,
     });
   }
   return occurrences;
@@ -334,6 +343,16 @@ export function evaluateLimitationConfirmation(input: StoredDeadlineProvenance):
   }
 
   const sole = candidates[0]!;
+  if (
+    sole.dateOwnerEventType &&
+    (sole.dateOwnerEventType !== sole.eventType || !mayStartLimitationClock(sole.dateOwnerEventType))
+  ) {
+    return refuse(
+      "ambiguous",
+      "Possible limitation issue — relevant dismissal/resignation date is unresolved. Confirmation is refused.",
+      "date_ownership_unresolved"
+    );
+  }
   const storedId = input.sourceEventId ?? null;
   if (!storedId || !isSpanFingerprint(storedId)) {
     return refuse(
