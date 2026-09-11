@@ -2,8 +2,10 @@ import { addDays } from "date-fns";
 import { monthNameToNumber, parseLegalDate, parseNumericDateToken, parseStrictCivilDate, type ParseStatus } from "@/lib/legal/strict-date";
 import {
   classifyLegalEventType,
+  lastProceduralNounBefore,
   scanLegalEventMentions,
   type LegalEventType,
+  type MentionRole,
 } from "@/lib/legal/event-semantics";
 import { addLondonCivilDays, londonCivilUtcDate, now } from "@/lib/clock";
 
@@ -105,6 +107,7 @@ export interface ExtractedDate {
   dateOwnerEventType: LegalEventType | null;
   dateOwnerStart: number | null;
   dateOwnerEnd: number | null;
+  mentionRole: MentionRole;
 }
 
 const NARRATIVE_SOURCE_ID = "narrative";
@@ -153,6 +156,7 @@ function extracted(
     dateOwnerEventType?: LegalEventType | null;
     dateOwnerStart?: number | null;
     dateOwnerEnd?: number | null;
+    mentionRole?: MentionRole;
   }
 ): ExtractedDate {
   const eventType = extra.eventType ?? classifyLegalEventType(context);
@@ -177,6 +181,7 @@ function extracted(
     dateOwnerEventType: extra.dateOwnerEventType ?? null,
     dateOwnerStart: extra.dateOwnerStart ?? null,
     dateOwnerEnd: extra.dateOwnerEnd ?? null,
+    mentionRole: extra.mentionRole ?? "occurrence",
   };
 }
 
@@ -365,18 +370,19 @@ export function extractDates(text: string, reference: Date = now()): ExtractedDa
 }
 
 function nearestEventOwner(
-  mentions: { start: number; end: number; eventType: LegalEventType }[],
+  mentions: { start: number; end: number; eventType: LegalEventType; role: MentionRole }[],
   dateStart: number
-): { start: number; end: number; eventType: LegalEventType } | null {
-  if (mentions.length === 0) return null;
-  const preceding = mentions.filter((m) => m.start <= dateStart);
+): { start: number; end: number; eventType: LegalEventType; role: MentionRole } | null {
+  const usable = mentions.filter((m) => m.role !== "reference");
+  if (usable.length === 0) return null;
+  const preceding = usable.filter((m) => m.start <= dateStart);
   if (preceding.length > 0) return preceding[preceding.length - 1]!;
-  return mentions[0]!;
+  return usable[0]!;
 }
 
 /**
- * Bind each date token to the nearest same-sentence event mention.
- * Leftover dates are never borrowed by an undated qualifying event.
+ * Bind each date token to the nearest same-sentence *occurrence*.
+ * Qualifying words that are only the topic of a procedural event do not own dates.
  */
 function applyEventDateOwnership(text: string, results: ExtractedDate[]): void {
   const mentions = scanLegalEventMentions(text);
@@ -384,18 +390,18 @@ function applyEventDateOwnership(text: string, results: ExtractedDate[]): void {
   for (const date of results) {
     const range = sentenceRange(text, date.sourceStartOffset);
     const inSentence = mentions.filter((m) => m.start >= range.start && m.start < range.end);
-    const owner = nearestEventOwner(inSentence, date.sourceStartOffset);
+    const owner = nearestEventOwner(inSentence, date.sourceStartOffset)
+      ?? lastProceduralNounBefore(text, date.sourceStartOffset);
     if (!owner) continue;
     date.eventType = owner.eventType;
     date.kind = owner.eventType;
     date.dateOwnerEventType = owner.eventType;
     date.dateOwnerStart = owner.start;
     date.dateOwnerEnd = owner.end;
+    date.mentionRole = owner.role;
   }
 
   for (const mention of mentions) {
-    // Bare incident keywords ("discrimination") are not a second limitation
-    // source. Only dismissal/resignation mentions stay unresolved when undated.
     if (mention.eventType !== "dismissal" && mention.eventType !== "resignation") continue;
     const owned = results.some(
       (d) => d.dateOwnerStart === mention.start && d.dateOwnerEnd === mention.end
@@ -413,6 +419,7 @@ function applyEventDateOwnership(text: string, results: ExtractedDate[]): void {
         dateOwnerEventType: mention.eventType,
         dateOwnerStart: mention.start,
         dateOwnerEnd: mention.end,
+        mentionRole: mention.role,
       })
     );
   }
