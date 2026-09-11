@@ -6,10 +6,11 @@ dependency gate on High/Critical findings. It is not a blanket ignore.
 advisory ID plus approved dependency context**, not package name, via
 name, parent package, path alone, or severity.
 
-**EXCEPTION IDENTITY INVARIANT:** a dependency exception applies only to
-the exact approved advisory identity and approved dependency context.
-Unknown or different High advisories never inherit another advisory's
-exception. Missing advisory IDs fail closed.
+**ADVISORY SET INVARIANT:** every High/Critical advisory in a
+vulnerability record must be independently identified and authorized.
+One approved GHSA never PASSes a record that also contains unknown,
+malformed, missing-ID, or unapproved High/Critical causes. Empty High
+`via` lists and malformed `via` values fail closed.
 
 Reviewed: 2026-09-10  
 Next review / `review_by`: 2026-12-31  
@@ -37,9 +38,11 @@ Owner: UJRIS engineering — Step 2A security track
 A **different** High on `deepmerge-ts`, an **unknown** High on the same
 package or Prisma CLI path, a missing advisory ID, a Critical on the same
 package, a **production_runtime** path (for example `@prisma/client`), an
-**unknown** path, or an expired exception **fails**
+**unknown** path, an expired exception, or an approved GHSA **plus**
+another unidentified/malformed High **fails**
 `npm run test:audit-policy`. Via-name-only parent rows do not inherit
-EX-DEP-001 unless the audit graph reconstructs **this** GHSA.
+EX-DEP-001 unless the audit graph reconstructs **this** GHSA and no other
+High/Critical cause remains unidentified.
 Audit-service errors, malformed JSON, empty/truncated output, and timeouts
 are **ERROR** (exit 2), never a clean PASS.
 

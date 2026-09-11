@@ -5,7 +5,7 @@
 > and what's next. Update it as part of every ticket — a ticket is not
 > done until this file reflects reality.
 
-Last updated: 2026-09-10 (ticket: Step 2A-R5 ambiguous date + dependency exception identity — see Ticket Log).
+Last updated: 2026-09-11 (ticket: Step 2A-R6 event/date ownership + advisory-set evaluation — see Ticket Log).
 
 ## 1. What UJRIS is
 
@@ -79,6 +79,18 @@ full record. Summary:
   High advisory is a dated development-only exception — see
   `docs/security/DEPENDENCY_EXCEPTION_REGISTER.md`.
   `docs/security/SECURITY_REGRESSION_MATRIX.md`.
+
+**Step 2A-R6 invariants (must hold; R5 unresolved-source / exception
+identity still hold):**
+
+- **EVENT/DATE OWNERSHIP:** a date may only resolve a qualifying event
+  when it can be deterministically associated with that event's source
+  occurrence. Hearing, grievance, appeal, and other event dates must
+  never be borrowed to resolve an undated dismissal or resignation.
+- **ADVISORY SET:** every High/Critical advisory must be independently
+  identified and authorized. One approved advisory never causes a
+  vulnerability record that also contains unknown, malformed, or
+  unapproved High/Critical advisories to pass.
 
 **Step 2A-R5 invariants (must hold; R4 source-span / civil-date /
 portability still hold):**
@@ -210,6 +222,29 @@ should all pass cleanly before any ticket is considered done — see Ticket
 Log for the last verified run of each.
 
 ## 7. Ticket log
+
+### 2026-09-11 — Step 2A-R6 (Codex 2A-R5 FAIL — date ownership + advisory set)
+
+Branch: `step-2a-security-test-foundation` — **not merged**. Step 2B /
+Supabase **not started**. Forensic worker **not implemented**. R4/R5
+source-span, unresolved-qualifying-source, civil-date, hearing-urgency,
+Windows/Linux CI, and two-cycle E2E work **not reopened**.
+
+Codex independently reproduced: an undated dismissal inheriting a
+hearing date and becoming confirmable; an approved GHSA plus an unknown
+or malformed High still PASSing the dependency gate.
+
+Remediation: nearest same-sentence event-mention date ownership;
+confirmation provenance check; per-`via` advisory evaluation. EX-DEP-001
+itself is unchanged.
+
+See `docs/implementation/STEP2A_R6_PLAN.md` and
+`docs/implementation/STEP2A_R6_IMPLEMENTATION_REPORT.md`.
+
+**Requires independent review:** YES — return this branch to Codex for a
+narrow check of date ownership, advisory-set semantics, and focused
+R4/R5 regression. Do not merge. Do not start Supabase. Do not start
+Step 2B. Do not claim production-ready.
 
 ### 2026-09-10 — Step 2A-R5 (Codex 2A-R4 FAIL — ambiguous date + exception identity)
 
