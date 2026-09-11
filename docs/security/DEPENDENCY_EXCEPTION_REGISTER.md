@@ -6,6 +6,11 @@ dependency gate on High/Critical findings. It is not a blanket ignore.
 advisory ID plus approved dependency context**, not package name, via
 name, parent package, path alone, or severity.
 
+**EXCEPTION IDENTITY INVARIANT:** a dependency exception applies only to
+the exact approved advisory identity and approved dependency context.
+Unknown or different High advisories never inherit another advisory's
+exception. Missing advisory IDs fail closed.
+
 **ADVISORY SET INVARIANT:** every High/Critical advisory in a
 vulnerability record must be independently identified and authorized.
 One approved GHSA never PASSes a record that also contains unknown,
