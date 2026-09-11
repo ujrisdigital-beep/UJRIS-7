@@ -96,19 +96,29 @@ export function scanLegalEventMentions(text: string): LegalEventMention[] {
   return assignMentionRoles(text, distinct);
 }
 
-/** Same-clause gap that makes a qualifying word the topic of a procedural event. */
-const TIGHT_REFERENCE_GAP =
-  /^\s+(?:for|about|concerning|regarding|over|in relation to)\s+(?:(?:my|the|a|an)\s+)?$/i;
+/** Same-clause relation that makes a qualifying word the topic of a procedural event. */
+const RELATION_SOURCE =
+  "related\\s+to|relating\\s+to|in\\s+relation\\s+to|regarding|concerning|concerned|against|about|over|for|re";
 
-/**
- * Immediate left context: a procedural noun (including "meeting", which is
- * not always a scanned event type) plus a topic preposition.
- */
-const PROCEDURAL_TOPIC_PREFIX =
-  /(?:hearing|appeal|grievance(?:\s+meeting)?|tribunal(?:\s+hearing)?|meeting)\s+(?:for|about|concerning|regarding|over|in relation to)\s+(?:(?:my|the|a|an)\s+)?$/i;
+const DETERMINER_SOURCE = "(?:(?:my|the|a|an)\\s+)?";
 
-const PROCEDURAL_NOUN =
-  /\b(grievance\s+meeting|tribunal\s+hearing|hearing|appeal|grievance|meeting)\b/gi;
+/** Procedural heads that may own a date without starting the limitation clock. */
+const PROCEDURAL_HEAD_SOURCE =
+  "case\\s+management\\s+hearing|disciplinary\\s+hearing|preliminary\\s+hearing|final\\s+hearing|appeal\\s+hearing|grievance\\s+meeting|tribunal\\s+hearing|hearing|appeal|grievance|meeting|review|investigation";
+
+const TIGHT_REFERENCE_GAP = new RegExp(`^\\s+(?:${RELATION_SOURCE})\\s+${DETERMINER_SOURCE}$`, "i");
+
+const PROCEDURAL_TOPIC_PREFIX = new RegExp(
+  `(?:${PROCEDURAL_HEAD_SOURCE})\\s+(?:${RELATION_SOURCE})\\s+${DETERMINER_SOURCE}$`,
+  "i"
+);
+
+const PROCEDURAL_NOUN = new RegExp(`\\b(${PROCEDURAL_HEAD_SOURCE})\\b`, "gi");
+
+const COMPOUND_PROCEDURAL_TAIL = new RegExp(
+  `^\\s+(?:(?:tribunal|disciplinary|preliminary|final|appeal|grievance|employment|internal|oral|case\\s+management)\\s+)*(?:${PROCEDURAL_HEAD_SOURCE})\\b`,
+  "i"
+);
 
 function isNamedQualifyingEvent(type: LegalEventType): boolean {
   return type === "dismissal" || type === "resignation";
@@ -175,6 +185,11 @@ function assignMentionRoles(text: string, mentions: MentionSpan[]): LegalEventMe
         mention.role = "reference";
         continue;
       }
+    }
+
+    if (COMPOUND_PROCEDURAL_TAIL.test(text.slice(mention.end))) {
+      mention.role = "reference";
+      continue;
     }
 
     if (precededByProceduralTopicPhrase(text, mention.start)) {
