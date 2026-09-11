@@ -26,6 +26,7 @@ import { calculatePrimaryLimitationDate } from "@/lib/legal/deadlines";
 import {
   LIMITATION_INFERENCE_VERSION,
   LIMITATION_RULE_ID,
+  isProceduralAttentionEvent,
   mayStartLimitationClock,
   type LegalEventType,
 } from "@/lib/legal/event-semantics";
@@ -320,6 +321,23 @@ export function evaluateLimitationConfirmation(input: StoredDeadlineProvenance):
   }
 
   const extracted = input.extractedDates ?? analyzeNarrative(input.narrative).dates;
+  const storedCivil = utcCivilKey(input.sourceEventDate);
+  const proceduralOwnsStoredDate = extracted.some(
+    (d) =>
+      d.civilDate === storedCivil &&
+      d.dateOwnerEventType != null &&
+      isProceduralAttentionEvent(d.dateOwnerEventType) &&
+      d.mentionRole !== "reference"
+  );
+  const occurrenceOwnsStoredDate = extracted.some((d) => d.civilDate === storedCivil && isResolvedQualifyingDate(d));
+  if (mayStartLimitationClock(eventType) && proceduralOwnsStoredDate && !occurrenceOwnsStoredDate) {
+    return refuse(
+      "ambiguous",
+      "Possible limitation issue — relevant dismissal/resignation date is unresolved. Confirmation is refused.",
+      "date_ownership_unresolved"
+    );
+  }
+
   const occurrences = qualifyingSourceOccurrences(extracted);
   const unresolved = occurrences.filter((o) => !o.resolved);
   if (unresolved.length > 0) {
