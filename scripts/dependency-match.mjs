@@ -157,11 +157,20 @@ export function evaluateExceptionGate(records, policy, today) {
       pathClass: record.pathClass ?? classifyRecordPaths(record.nodes ?? []),
     };
     const ghsas = [...new Set((annotated.ghsaIds ?? []).map(normalizeGhsa).filter(Boolean))];
-    if (ghsas.length === 0) {
+    if (annotated.malformedVia) {
+      failures.push(`Malformed advisory via in ${annotated.package} (pathClass=${annotated.pathClass})`);
+      continue;
+    }
+    if (annotated.emptyAdvisorySet || (ghsas.length === 0 && (annotated.unidentifiedAdvisories ?? 0) > 0) || ghsas.length === 0) {
       failures.push(
         `Unreviewed ${annotated.severity} advisory in ${annotated.package} (missing advisory id; pathClass=${annotated.pathClass})`
       );
       continue;
+    }
+    if ((annotated.unidentifiedAdvisories ?? 0) > 0) {
+      failures.push(
+        `Unreviewed unidentified ${annotated.severity} advisory in ${annotated.package} alongside ${ghsas.join(", ")} (pathClass=${annotated.pathClass})`
+      );
     }
     for (const ghsa of ghsas) {
       const slice = { ...annotated, ghsaIds: [ghsa] };
@@ -230,33 +239,80 @@ function isPlainObject(value) {
 }
 
 function ghsaFromViaItem(item) {
-  if (typeof item === "object" && item && item.url) {
-    const match = String(item.url).match(/GHSA-[a-z0-9-]+/i);
-    return match ? match[0].toUpperCase() : null;
+  if (typeof item !== "object" || item == null) return null;
+  const candidates = [item.url, item.id, item.ghsa, item.advisoryId];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const match = String(candidate).match(/GHSA-[a-z0-9-]+/i);
+    if (match) return match[0].toUpperCase();
   }
   return null;
 }
 
 /**
- * Reconstruct advisory identity from the audit graph. String `via`
- * entries copy GHSAs from the named sibling vulnerability. This is not
- * package-only exception inheritance — the resolved ID must still match
- * exactly later.
+ * Walk every via entry. One approved GHSA never hides another High.
+ * String names reconstruct a GHSA only from the named sibling; otherwise
+ * the cause stays unidentified and the record cannot PASS.
  */
-function resolveGhsaIds(vuln, vulns, seen) {
-  const via = Array.isArray(vuln.via) ? vuln.via : [];
-  const direct = via.map(ghsaFromViaItem).filter(Boolean);
-  if (direct.length > 0) return [...new Set(direct)];
-  const inherited = [];
-  for (const item of via) {
-    if (typeof item !== "string") continue;
-    if (seen.has(item)) continue;
-    seen.add(item);
-    const parent = vulns[item];
-    if (!isPlainObject(parent)) continue;
-    inherited.push(...resolveGhsaIds(parent, vulns, seen));
+function analyzeViaList(vuln, vulns, seen) {
+  const via = vuln.via;
+  if (via == null) {
+    return { ghsaIds: [], unidentified: 1, malformed: false, emptySet: true };
   }
-  return [...new Set(inherited)];
+  if (!Array.isArray(via)) {
+    return { ghsaIds: [], unidentified: 0, malformed: true, emptySet: false };
+  }
+  if (via.length === 0) {
+    return { ghsaIds: [], unidentified: 1, malformed: false, emptySet: true };
+  }
+
+  const ghsaIds = [];
+  let unidentified = 0;
+  let malformed = false;
+
+  for (const item of via) {
+    if (item == null) {
+      malformed = true;
+      continue;
+    }
+    if (typeof item === "string") {
+      if (!item.trim()) {
+        malformed = true;
+        continue;
+      }
+      if (seen.has(item)) continue;
+      seen.add(item);
+      const parent = vulns[item];
+      if (!isPlainObject(parent)) {
+        unidentified += 1;
+        continue;
+      }
+      const nested = analyzeViaList(parent, vulns, seen);
+      ghsaIds.push(...nested.ghsaIds);
+      unidentified += nested.unidentified;
+      if (nested.malformed) malformed = true;
+      if (nested.ghsaIds.length === 0 && nested.unidentified === 0 && !nested.malformed) {
+        unidentified += 1;
+      }
+      continue;
+    }
+    if (!isPlainObject(item)) {
+      malformed = true;
+      continue;
+    }
+    const ghsa = ghsaFromViaItem(item);
+    if (ghsa) {
+      ghsaIds.push(ghsa);
+      continue;
+    }
+    if (Object.keys(item).length === 0) {
+      malformed = true;
+      continue;
+    }
+    unidentified += 1;
+  }
+
+  return { ghsaIds: [...new Set(ghsaIds)], unidentified, malformed, emptySet: false };
 }
 
 export function auditHasMalformedVulnerability(audit) {
@@ -276,14 +332,17 @@ export function recordsFromAudit(audit) {
     }
     const severity = vuln.severity;
     if (severity !== "high" && severity !== "critical") continue;
+    const analysis = analyzeViaList(vuln, vulns, new Set([name]));
     const via = Array.isArray(vuln.via) ? vuln.via : [];
-    const ghsaIds = resolveGhsaIds(vuln, vulns, new Set([name]));
     const viaNames = via.map((item) => (typeof item === "string" ? item : item?.name)).filter(Boolean);
     const nodes = vuln.nodes ?? [];
     records.push({
       package: name,
       severity,
-      ghsaIds,
+      ghsaIds: analysis.ghsaIds,
+      unidentifiedAdvisories: analysis.unidentified,
+      emptyAdvisorySet: analysis.emptySet,
+      malformedVia: analysis.malformed,
       viaNames,
       nodes,
       pathClass: classifyRecordPaths(nodes),
@@ -337,6 +396,15 @@ export function evaluateAuditPolicy(input, policy, today) {
       };
     }
     throw error;
+  }
+  if (records.some((row) => row.malformedVia)) {
+    return {
+      result: "ERROR",
+      exitCode: 2,
+      failures: ["AUDIT COULD NOT COMPLETE: malformed_via"],
+      records,
+      reason: "malformed_via",
+    };
   }
   const failures = evaluateExceptionGate(records, policy, today);
   if (failures.length > 0) {

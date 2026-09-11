@@ -33,6 +33,9 @@ export function evaluateExceptionGate(
     severity: string;
     ghsaIds?: string[];
     viaNames?: string[];
+    unidentifiedAdvisories?: number;
+    emptyAdvisorySet?: boolean;
+    malformedVia?: boolean;
     nodes?: string[];
     pathClass?: PathClass;
   }>,
